@@ -1112,8 +1112,14 @@ $('#authSwitch').addEventListener('click', () => setAuthMode(authMode === 'signi
 $('#authCancel').addEventListener('click', () => closeDlg($('#authDlg')));
 $('#googleBtn').addEventListener('click', async () => {
   if (!sb) return $('#authNote').textContent = NOT_CONFIGURED;
-  const { error } = await sb.auth.signInWithOAuth({ provider:'google', options:{ redirectTo: location.href.split('#')[0] } });
+  $('#authNote').textContent = 'Opening Google sign-in...';
+  const { data, error } = await sb.auth.signInWithOAuth({
+    provider:'google',
+    options:{ redirectTo: new URL('/legacy.html', location.origin).href, skipBrowserRedirect:true }
+  });
   if (error) $('#authNote').textContent = error.message;
+  else if (data && data.url) window.top.location.assign(data.url);
+  else $('#authNote').textContent = 'Could not start Google sign-in. Please try again.';
 });
 $('#authForm').addEventListener('submit', async e => {
   e.preventDefault();
