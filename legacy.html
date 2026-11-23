@@ -715,8 +715,8 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
    JaMusic | vanilla JS + Supabase (auth, database, storage)
    Paste your project values below. Run setup.sql once in the Supabase SQL editor.
    ========================================================================== */
-const SUPABASE_URL = '';             // e.g. https://abcdxyz.supabase.co  (Project Settings > API)
-const SUPABASE_PUBLISHABLE_KEY = ''; // e.g. sb_publishable_...            (Project Settings > API Keys)
+const SUPABASE_URL = '%VITE_SUPABASE_URL%';
+const SUPABASE_PUBLISHABLE_KEY = '%VITE_SUPABASE_PUBLISHABLE_KEY%';
 
 (() => {
 'use strict';
