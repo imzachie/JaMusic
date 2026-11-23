@@ -279,11 +279,15 @@ h2.display{font-size:clamp(40px,6vw,80px);font-weight:500;letter-spacing:-.03em;
 /* ---------- Expanded player (glass overlay) ---------- */
 .xp{
   position:fixed;inset:0;z-index:90;overflow:hidden;visibility:hidden;opacity:0;pointer-events:none;
-  transition:opacity .6s var(--ease),visibility 0s .6s;isolation:isolate;
+  transition:opacity .24s var(--ease),visibility 0s .24s;isolation:isolate;
+  -webkit-backdrop-filter:none;backdrop-filter:none;
 }
-.xp.open{visibility:visible;opacity:1;pointer-events:auto;transition:opacity .6s var(--ease)}
+.xp.open{visibility:visible;opacity:1;pointer-events:auto;transition:opacity .24s var(--ease)}
 .xp .bgbox{inset:0}
-.xp .bgbox .bgl.on{opacity:.8}
+.xp .bgbox .bgl{filter:blur(22px) saturate(1.05);transform:scale(1.06)}
+.xp .bgbox .bgl.on{opacity:.48}
+.xp-open .grain,.xp-open .cursor-dot,.xp-open .cursor-label{display:none !important}
+.xp-open .xp .bgbox::after{background:rgba(17,19,21,.68)}
 .xp .bgbox::after{content:"";position:absolute;inset:0;background:rgba(17,19,21,.55)}
 .xp-close{position:absolute;top:var(--s3);left:var(--s3);z-index:3;color:var(--offwhite)}
 .xp-grid{position:relative;z-index:2;height:100%;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:var(--s8);padding:var(--s12) var(--s8) var(--s8);align-items:center;max-width:1280px;margin:0 auto}
@@ -1002,7 +1006,7 @@ audio.addEventListener('pause', () => setPlaying(false));
 audio.addEventListener('loadedmetadata', () => { lyrNow = -1; renderTime(true); });
 audio.addEventListener('error', () => { setPlaying(false); toast('That file would not play. Try another track.'); });
 audio.addEventListener('ended', () => { if (state.repeat === 'one'){ audio.currentTime = 0; play(); } else next(true); });
-(function loop(){ if (state.playing) renderTime(); requestAnimationFrame(loop); })();
+audio.addEventListener('timeupdate', () => renderTime());
 
 /* ---------- Volume ---------- */
 function paintVolume(){
@@ -1013,12 +1017,13 @@ function paintVolume(){
 }
 
 /* ---------- Expanded player (shared-element transition) ---------- */
-const xp = $('#xp'), barCover = $('#barCover'), xpCover = $('#xpCover');
+const xp = $('#xp');
 let xpOpen = false, lastFocus = null;
 function swapXp(open){
   xpOpen = open;
   xp.classList.toggle('open', open);
   xp.setAttribute('aria-hidden', String(!open));
+  document.body.classList.toggle('xp-open', open);
   document.body.style.overflow = open ? 'hidden' : '';
   if (open){ lyrNow = -1; renderTime(true); $('#xpClose').focus({ preventScroll:true }); }
   else if (lastFocus) lastFocus.focus({ preventScroll:true });
@@ -1026,13 +1031,9 @@ function swapXp(open){
 function setXp(open){
   if (open === xpOpen || !cur()) return;
   if (open) lastFocus = document.activeElement;
-  if (!reduced && document.startViewTransition){
-    const from = open ? barCover : xpCover, to = open ? xpCover : barCover;
-    from.style.viewTransitionName = 'cover';
-    xp.style.transition = 'none';
-    const vt = document.startViewTransition(() => { from.style.viewTransitionName = ''; to.style.viewTransitionName = 'cover'; swapXp(open); });
-    vt.finished.finally(() => { to.style.viewTransitionName = ''; xp.style.transition = ''; });
-  } else swapXp(open);
+  // Avoid capturing/animating a full-page View Transition for the player overlay;
+  // that snapshot is expensive on lower-powered devices and large screens.
+  swapXp(open);
 }
 
 /* ---------- Custom cursor ---------- */
