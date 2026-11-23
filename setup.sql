@@ -3,6 +3,8 @@
 
 create extension if not exists pgcrypto;
 
+grant usage on schema public to anon, authenticated;
+
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   username text not null unique check (username ~ '^[a-z0-9_]{3,20}$'),
@@ -35,6 +37,12 @@ create table if not exists public.likes (
   created_at timestamptz not null default now(),
   primary key (user_id, track_id)
 );
+
+grant select on public.profiles to anon, authenticated;
+grant insert, update on public.profiles to authenticated;
+grant select on public.tracks to anon, authenticated;
+grant insert, update, delete on public.tracks to authenticated;
+grant select, insert, delete on public.likes to authenticated;
 
 create index if not exists tracks_created_at_idx on public.tracks (created_at desc);
 create index if not exists tracks_user_id_idx on public.tracks (user_id);
@@ -82,3 +90,6 @@ drop policy if exists "Users update JaMusic assets in own folder" on storage.obj
 create policy "Users update JaMusic assets in own folder" on storage.objects for update to authenticated using (bucket_id in ('audio', 'artwork', 'profiles') and (storage.foldername(name))[1] = auth.uid()::text) with check (bucket_id in ('audio', 'artwork', 'profiles') and (storage.foldername(name))[1] = auth.uid()::text);
 drop policy if exists "Users delete JaMusic assets in own folder" on storage.objects;
 create policy "Users delete JaMusic assets in own folder" on storage.objects for delete to authenticated using (bucket_id in ('audio', 'artwork', 'profiles') and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- Force PostgREST to pick up freshly-created/updated tables and relationships.
+notify pgrst, 'reload schema';
