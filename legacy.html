@@ -763,7 +763,7 @@ async function reloadTracks(){
   const { data, error } = await sb.from('tracks')
     .select('*, profiles(display_name, username, avatar_url, banner_url, pronouns, bio, created_at)')
     .order('created_at', { ascending:false }).limit(200);
-  if (error){ toast('Could not load tracks. Did you run setup.sql?'); console.error(error); return renderAll(); }
+  if (error){ toast(`Could not load tracks: ${error.message}`); console.error('Supabase track query failed:', error); return renderAll(); }
   state.tracks = data || [];
   const idx = state.tracks.findIndex(t => t.id === keepId);
   if (idx < 0 && state.playing) { audio.pause(); setPlaying(false); }
@@ -823,6 +823,9 @@ function renderLists(){
     </button>`).join('');
   $('#allTracks').innerHTML = shown.map(([, i]) => rowHTML(i)).join('');
   $('#trackCount').textContent = `${shown.length} track${shown.length === 1 ? '' : 's'}`;
+  $('#noMatch').textContent = state.tracks.length
+    ? 'Nothing matches that search. Try an artist, a title or a genre.'
+    : 'No tracks have been uploaded yet.';
   $('#noMatch').hidden = shown.length > 0;
 }
 function renderArtist(){
@@ -859,10 +862,19 @@ function renderAuthUI(){
 function renderAll(){
   const has = state.tracks.length > 0;
   $('#np').hidden = !has; $('#npEmpty').hidden = has;
-  $('#bar').hidden = !has; $('#discover').hidden = !has; $('#artist').hidden = !has;
+  $('#bar').hidden = !has;
+  // Keep sidebar destinations available even before the first track is uploaded.
+  $('#discover').hidden = false; $('#artist').hidden = false;
   renderCta(); renderLists();
   if (has) renderTrack();
-  else { audio.pause(); audio.removeAttribute('src'); setPlaying(false); document.title = 'JaMusic'; }
+  else {
+    $('#aName').textContent = 'Artists';
+    $('#aBio').textContent = 'Artist profiles will appear here when the first track is uploaded.';
+    $('#aBio').hidden = false;
+    $('#aId').textContent = '';
+    $('#popular').innerHTML = '';
+    audio.pause(); audio.removeAttribute('src'); setPlaying(false); document.title = 'JaMusic';
+  }
 }
 function markCurrent(){ const t = cur(); $$('.row').forEach(r => r.classList.toggle('is-current', !!t && +r.dataset.i === state.i)); }
 function renderTrack(){
