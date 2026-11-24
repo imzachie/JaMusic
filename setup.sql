@@ -41,7 +41,9 @@ create table if not exists public.likes (
 grant select on public.profiles to anon, authenticated;
 grant insert, update on public.profiles to authenticated;
 grant select on public.tracks to anon, authenticated;
-grant insert, update, delete on public.tracks to authenticated;
+grant insert, delete on public.tracks to authenticated;
+revoke update on public.tracks from public, anon, authenticated;
+grant update (lyrics) on public.tracks to authenticated;
 grant select, insert, delete on public.likes to authenticated;
 
 create index if not exists tracks_created_at_idx on public.tracks (created_at desc);
