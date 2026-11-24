@@ -37,17 +37,6 @@ jobs:
           SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)"
           test -n "$SDKMANAGER"
           "$SDKMANAGER" --install 'platforms;android-35' 'build-tools;35.0.0'
-      - name: Check Supabase app configuration
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || vars.SUPABASE_URL || secrets.VITE_SUPABASE_URL || vars.VITE_SUPABASE_URL }}
-          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY || vars.SUPABASE_PUBLISHABLE_KEY || secrets.VITE_SUPABASE_PUBLISHABLE_KEY || vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
-        run: |
-          if [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_PUBLISHABLE_KEY" ]; then
-            echo "Supabase client configuration: available" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::warning::Supabase client configuration is missing; the APK will show setup guidance instead of uploaded tracks. Add repository Actions variables/secrets SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY."
-            echo "Supabase client configuration: **missing** (APK will not load real tracks until configured)." >> "$GITHUB_STEP_SUMMARY"
-          fi
       - name: Build signed release APK
         shell: bash
         env:
