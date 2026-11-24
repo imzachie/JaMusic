@@ -67,5 +67,6 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-common:1.5.1")
+    implementation("androidx.media:media:1.7.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

@@ -1,13 +1,27 @@
 package com.jamusic.app
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
+import android.os.Build
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.NotificationCompat
+import androidx.lifecycle.lifecycleScope
+import androidx.media.app.NotificationCompat.MediaStyle
+import android.support.v4.media.MediaMetadataCompat
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -75,6 +89,12 @@ private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
 class MainActivity : ComponentActivity() {
     private lateinit var player: ExoPlayer
+    private lateinit var mediaSession: MediaSessionCompat
+    private var notificationTrack: Track? = null
+    private var notificationPlaying = false
+    private var notificationArtwork: Bitmap? = null
+    private var artworkRequestTrackId: String? = null
+    private var artworkAttemptedTrackId: String? = null
     var signedInAs by mutableStateOf<String?>(null)
         private set
     var signedInUserId by mutableStateOf<String?>(null)
@@ -84,6 +104,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         player = ExoPlayer.Builder(this).build()
+        setupMediaSession()
         val session = getSharedPreferences("session", MODE_PRIVATE)
         signedInAs = session.getString("email", null)
         signedInUserId = session.getString("user_id", null)
@@ -99,12 +120,121 @@ class MainActivity : ComponentActivity() {
                     saveProfile = { profile, avatar, banner -> updateProfile(profile, avatar, banner) },
                     uploadTrack = { title, album, genre, lyricMode, lyricText, audioUri, coverUri -> uploadTrack(title, album, genre, lyricMode, lyricText, audioUri, coverUri) },
                     saveLyrics = { id, lyrics -> saveTrackLyrics(id, lyrics) },
+                    onNowPlayingChanged = { track, playing -> updateMediaNotification(track, playing) },
                     onEmailAuth = { email, password, create -> authenticateEmail(email, password, create) },
                     onGoogleAuth = { beginGoogleSignIn() },
                     onSignOut = { signOut() }
                 )
             }
         }
+    }
+
+    private fun setupMediaSession() {
+        val manager = getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(NotificationChannel(MEDIA_CHANNEL, "JaMusic playback", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Playback controls for JaMusic"
+                setShowBadge(false)
+            })
+        }
+        mediaSession = MediaSessionCompat(this, "JaMusic").apply {
+            setSessionActivity(PendingIntent.getActivity(this@MainActivity, 0, Intent(this@MainActivity, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+            setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
+            isActive = true
+            setCallback(object : MediaSessionCompat.Callback() {
+                override fun onPlay() { player.play() }
+                override fun onPause() { player.pause() }
+                override fun onSkipToNext() { if (player.hasNextMediaItem()) player.seekToNextMediaItem() }
+                override fun onSkipToPrevious() { if (player.hasPreviousMediaItem()) player.seekToPreviousMediaItem() else player.seekTo(0) }
+                override fun onSeekTo(pos: Long) { player.seekTo(pos) }
+            })
+        }
+        MediaActionHandler.callback = { action ->
+            runOnUiThread {
+                when (action) {
+                    MediaActionHandler.PLAY_PAUSE -> if (player.isPlaying) player.pause() else player.play()
+                    MediaActionHandler.NEXT -> if (player.hasNextMediaItem()) player.seekToNextMediaItem()
+                    MediaActionHandler.PREVIOUS -> if (player.hasPreviousMediaItem()) player.seekToPreviousMediaItem() else player.seekTo(0)
+                }
+            }
+        }
+    }
+
+    private fun updateMediaNotification(track: Track?, playing: Boolean) {
+        if (notificationTrack?.id != track?.id) {
+            notificationArtwork = null
+            artworkRequestTrackId = null
+            artworkAttemptedTrackId = null
+        }
+        notificationTrack = track
+        notificationPlaying = playing
+        if (track == null) {
+            (getSystemService(NotificationManager::class.java)).cancel(PLAYBACK_NOTIFICATION_ID)
+            mediaSession.isActive = false
+            return
+        }
+        mediaSession.isActive = true
+        val metadata = MediaMetadataCompat.Builder()
+            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, track.title)
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, track.artist)
+            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, track.album)
+            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, player.duration.takeIf { it > 0 } ?: track.duration * 1000L)
+        notificationArtwork?.let {
+            metadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it)
+            metadata.putBitmap(MediaMetadataCompat.METADATA_KEY_ART, it)
+        }
+        mediaSession.setMetadata(metadata.build())
+        val actions = PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or PlaybackStateCompat.ACTION_PLAY_PAUSE or
+            PlaybackStateCompat.ACTION_SKIP_TO_NEXT or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or PlaybackStateCompat.ACTION_SEEK_TO
+        mediaSession.setPlaybackState(PlaybackStateCompat.Builder()
+            .setActions(actions)
+            .setState(if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED, player.currentPosition, if (playing) 1f else 0f)
+            .build())
+        val openIntent = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val notification = NotificationCompat.Builder(this, MEDIA_CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle(track.title)
+            .setContentText(track.artist)
+            .setSubText(track.album.takeIf { it.isNotBlank() })
+            .setLargeIcon(notificationArtwork)
+            .setContentIntent(openIntent)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+            .setOnlyAlertOnce(true)
+            .setOngoing(playing)
+            .addAction(android.R.drawable.ic_media_previous, "Previous", mediaActionIntent(MediaActionHandler.PREVIOUS, 1))
+            .addAction(if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play, if (playing) "Pause" else "Play", mediaActionIntent(MediaActionHandler.PLAY_PAUSE, 2))
+            .addAction(android.R.drawable.ic_media_next, "Next", mediaActionIntent(MediaActionHandler.NEXT, 3))
+            .setStyle(MediaStyle().setMediaSession(mediaSession.sessionToken).setShowActionsInCompactView(0, 1, 2))
+            .build()
+        getSystemService(NotificationManager::class.java).notify(PLAYBACK_NOTIFICATION_ID, notification)
+        loadNotificationArtwork(track)
+    }
+
+    private fun mediaActionIntent(action: String, requestCode: Int): PendingIntent {
+        val intent = Intent(this, MediaActionReceiver::class.java).setAction(action)
+        return PendingIntent.getBroadcast(this, requestCode, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+    }
+
+    private fun loadNotificationArtwork(track: Track) {
+        if (track.cover.isBlank() || artworkRequestTrackId == track.id || artworkAttemptedTrackId == track.id) return
+        artworkRequestTrackId = track.id
+        artworkAttemptedTrackId = track.id
+        lifecycleScope.launch(Dispatchers.IO) {
+            val bitmap = runCatching { java.net.URL(track.cover).openStream().use { BitmapFactory.decodeStream(it) } }.getOrNull()
+            withContext(Dispatchers.Main) {
+                if (notificationTrack?.id == track.id) {
+                    notificationArtwork = bitmap
+                    artworkRequestTrackId = null
+                    updateMediaNotification(track, notificationPlaying)
+                }
+            }
+        }
+    }
+
+    companion object {
+        private const val MEDIA_CHANNEL = "jamusic_media_playback"
+        private const val PLAYBACK_NOTIFICATION_ID = 2048
     }
 
     private suspend fun loadPublicTracks(): List<Track> = withContext(Dispatchers.IO) {
@@ -342,8 +472,26 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        player.release()
+        MediaActionHandler.callback = null
+        if (::mediaSession.isInitialized) mediaSession.release()
+        if (::player.isInitialized) {
+            getSystemService(NotificationManager::class.java).cancel(PLAYBACK_NOTIFICATION_ID)
+            player.release()
+        }
         super.onDestroy()
+    }
+}
+
+private object MediaActionHandler {
+    const val PLAY_PAUSE = "com.jamusic.app.MEDIA_PLAY_PAUSE"
+    const val NEXT = "com.jamusic.app.MEDIA_NEXT"
+    const val PREVIOUS = "com.jamusic.app.MEDIA_PREVIOUS"
+    @Volatile var callback: ((String) -> Unit)? = null
+}
+
+class MediaActionReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        MediaActionHandler.callback?.invoke(intent.action.orEmpty())
     }
 }
 
@@ -472,6 +620,7 @@ private fun JaMusicApp(
     saveProfile: suspend (Profile, Uri?, Uri?) -> Profile,
     uploadTrack: suspend (String, String, String, String, String, Uri?, Uri?) -> String,
     saveLyrics: suspend (String, String) -> Unit,
+    onNowPlayingChanged: (Track?, Boolean) -> Unit,
     onEmailAuth: suspend (String, String, Boolean) -> String,
     onGoogleAuth: () -> Unit,
     onSignOut: () -> Unit
@@ -522,10 +671,15 @@ private fun JaMusicApp(
             catch (error: Exception) { profileError = error.message ?: "Couldn't load your profile." }
         }
     }
-    DisposableEffect(player) {
+    LaunchedEffect(activeTrack, playing) { onNowPlayingChanged(activeTrack, playing) }
+    DisposableEffect(player, tracks) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying }
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) { currentMs = 0; durationMs = player.duration.coerceAtLeast(0) }
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                currentMs = 0
+                durationMs = player.duration.coerceAtLeast(0)
+                tracks.firstOrNull { it.id == mediaItem?.mediaId }?.let { activeTrack = it }
+            }
         }
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
@@ -599,7 +753,7 @@ private fun JaMusicApp(
                     Text("Liked songs", Modifier.padding(start = 22.dp, top = 18.dp, bottom = 8.dp), color = Cloud, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 }
                 itemsIndexed(tracks.filter { it.id in favorites }) { index, track ->
-                    TrackRow(track, index, isFavorite = true, onFavorite = { favorites = favorites - track.id }, onClick = { startTrack(player, track) { activeTrack = it; playerOpen = true } })
+                    TrackRow(track, index, isFavorite = true, onFavorite = { favorites = favorites - track.id }, onClick = { startTrack(player, track, tracks) { activeTrack = it; playerOpen = true } })
                 }
                 if (tracks.none { it.id in favorites }) item { Text("Tap the heart on a song to keep it here.", Modifier.padding(horizontal = 22.dp, vertical = 16.dp), color = Muted) }
             } else {
@@ -613,7 +767,7 @@ private fun JaMusicApp(
                     OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp), leadingIcon = { Icon(Icons.Default.Search, null) }, placeholder = { Text("Search songs or artists") }, shape = RoundedCornerShape(24.dp), singleLine = true)
                 }
                 if (tab == 0 && feedFilter == "Latest" && latestTrack != null) item {
-                    LatestUploadCard(latestTrack, onClick = { startTrack(player, latestTrack) { activeTrack = it; playerOpen = true } })
+                    LatestUploadCard(latestTrack, onClick = { startTrack(player, latestTrack, tracks) { activeTrack = it; playerOpen = true } })
                 }
                 if (tab == 0 || tab == 1) item {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -638,7 +792,7 @@ private fun JaMusicApp(
                 itemsIndexed(visibleTracks) { index, track ->
                     TrackRow(track, index, isFavorite = track.id in favorites,
                         onFavorite = { favorites = if (track.id in favorites) favorites - track.id else favorites + track.id },
-                        onClick = { startTrack(player, track) { activeTrack = it; playerOpen = true } })
+                        onClick = { startTrack(player, track, tracks) { activeTrack = it; playerOpen = true } })
                 }
                 if (!loading && loadError == null && filtered.isEmpty()) item {
                     Text(if (tracks.isEmpty()) "No public uploads yet." else if (feedFilter == "Liked") "No liked tracks yet. Tap a heart to add one." else "No matching uploads.", Modifier.padding(22.dp), color = Muted)
@@ -904,17 +1058,27 @@ private fun AuthPrompt(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
-private fun startTrack(player: ExoPlayer, track: Track, select: (Track) -> Unit) {
+private fun startTrack(player: ExoPlayer, track: Track, queue: List<Track>, select: (Track) -> Unit) {
     select(track)
     if (track.audio.isNotBlank()) {
-        player.setMediaItem(MediaItem.fromUri(track.audio))
+        val playlist = (queue.ifEmpty { listOf(track) }).filter { it.audio.isNotBlank() }
+        val selectedIndex = playlist.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
+        val mediaItems = playlist.map { item ->
+            val metadata = androidx.media3.common.MediaMetadata.Builder()
+                .setTitle(item.title).setArtist(item.artist)
+                .apply { if (item.cover.isNotBlank()) setArtworkUri(Uri.parse(item.cover)) }
+                .build()
+            MediaItem.Builder().setMediaId(item.id).setUri(item.audio).setMediaMetadata(metadata).build()
+        }
+        player.setMediaItems(mediaItems, selectedIndex, 0L)
         player.prepare()
         player.playWhenReady = true
     }
 }
 private fun playRelative(tracks: List<Track>, current: Track, step: Int, player: ExoPlayer, select: (Track) -> Unit) {
+    if (tracks.isEmpty()) return
     val index = tracks.indexOfFirst { it.id == current.id }.let { if (it < 0) 0 else it }
-    startTrack(player, tracks[(index + step + tracks.size) % tracks.size], select)
+    startTrack(player, tracks[(index + step + tracks.size) % tracks.size], tracks, select)
 }
 
 @Composable
