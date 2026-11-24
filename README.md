@@ -30,13 +30,8 @@ Then run `npm run dev`. The app opens at the Vite root URL. `.env` is ignored by
 
 Vite builds the app directly to `dist/index.html`. Google sign-in returns to the site root (`/`).
 
-## Whisper auto-generated lyrics
+## Free Whisper auto-generated lyrics
 
-Auto transcription runs server-side so the OpenAI credential is never exposed in the browser. Deploy the included Supabase Edge Function and set the key as a Supabase secret:
+Automatic transcription uses the open `onnx-community/whisper-tiny.en` model via Transformers.js and runs locally in the user's browser. It does not call a paid inference API, need an API key, or send the audio to a transcription service. The model files are fetched from the public Hugging Face model repository and cached by the browser; the first use may take time and uses the visitor's CPU and memory. Transcription is English-focused. Automatic mode is limited to audio files of 25 MB; manual and instrumental modes work without the model download.
 
-```sh
-supabase functions deploy generate-lyrics
-supabase secrets set OPENAI_API_KEY=your_openai_api_key
-```
-
-The function downloads the just-uploaded audio from the user's own `audio` storage folder, asks Whisper for timestamped segments, and returns `[minutes:seconds] lyric` lines. Audio files for auto transcription must be 25 MB or smaller. Manual lyrics and the instrumental option don't call the transcription service. Never put the OpenAI key in the site's Vite environment variables.
+Auto-generated and manual lyrics are stored with `[minutes:seconds]` timestamps. In the player, each timestamped line is synchronized to playback and can be clicked to seek to that point.

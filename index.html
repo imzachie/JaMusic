@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@1,6..72,400&display=swap" rel="stylesheet">
+<script type="module" src="/src/transcribe.js"></script>
 
 <style>
 /* ==========================================================================
@@ -708,11 +709,11 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
     </div>
     <fieldset class="lyrics-options" aria-label="Lyrics options">
       <legend>Lyrics</legend>
-      <label class="lyric-choice"><input type="radio" name="lyricMode" value="auto" checked><span><strong>Auto generated lyrics</strong><small>Transcribe this track with Whisper AI</small></span></label>
+      <label class="lyric-choice"><input type="radio" name="lyricMode" value="auto" checked><span><strong>Auto generated lyrics</strong><small>Free Whisper transcription, processed on this device</small></span></label>
       <label class="lyric-choice"><input type="radio" name="lyricMode" value="manual"><span><strong>Manual lyrics typing</strong><small>Enter timestamped lines yourself</small></span></label>
       <label class="lyric-choice"><input type="radio" name="lyricMode" value="instrumental"><span><strong>Instrumental</strong><small>Show “This song is instrumental” to listeners</small></span></label>
     </fieldset>
-    <p id="autoLyricsHint" class="field-hint">Whisper will generate timestamped lyrics after upload. Automatic transcription supports audio files up to 25 MB.</p>
+    <p id="autoLyricsHint" class="field-hint">The free Whisper model runs in your browser—no API key or credits. Its first download can take a little while. Automatic transcription supports audio files up to 25 MB.</p>
     <div id="manualLyricsWrap" hidden>
       <label class="f" for="upLyrics">One lyric per line, each starting with a timestamp</label>
       <textarea id="upLyrics" maxlength="8000" placeholder="[0:01] The first line (new line per lyric)"></textarea>
@@ -1290,23 +1291,16 @@ $('#uploadForm').addEventListener('submit', async e => {
   btn.disabled = true;
   let c, a, published = false;
   try {
+    if (mode === 'auto'){
+      if (typeof window.transcribeLyrics !== 'function') throw new Error('The local Whisper model is still loading. Wait a moment and try again.');
+      lyrics = await window.transcribeLyrics(file, message => { note.textContent = message; });
+    }
     note.textContent = 'Uploading artwork...'; c = await uploadFile('artwork', cover, 'cover');
     note.textContent = 'Uploading audio. Larger files take a moment...'; a = await uploadFile('audio', file, 'track');
     const duration = await audioDuration(file);
     if (mode === 'manual' && duration && manualLyrics.split('\n').some(line => {
       const m = line.trim().match(/^\[(\d{1,3}):([0-5]\d)\]/); return m && Number(m[1]) * 60 + Number(m[2]) > duration;
     })) throw new Error('A lyric timestamp is later than the end of this song. Check the timestamps and try again.');
-    if (mode === 'auto'){
-      note.textContent = 'Generating timestamped lyrics with Whisper...';
-      const { data, error } = await sb.functions.invoke('generate-lyrics', { body:{ audio_path:a.path } });
-      if (error){
-        let detail = null;
-        try { detail = await error.context?.json(); } catch {}
-        throw new Error(detail?.error || error.message || 'Could not generate lyrics. Deploy the generate-lyrics Supabase function and configure its OpenAI key.');
-      }
-      lyrics = data?.lyrics?.trim();
-      if (!lyrics) throw new Error('Whisper did not return lyrics for this file. Try Manual lyrics typing or choose Instrumental.');
-    }
     note.textContent = 'Publishing...';
     const { error } = await sb.from('tracks').insert({
       user_id:state.user.id, title, album:$('#upAlbum').value.trim() || null, genre:$('#upGenre').value.trim() || null,
