@@ -311,11 +311,11 @@ body.xp-open button,body.xp-open [role=slider]{cursor:pointer !important}
 .lyr{font-size:clamp(24px,2.8vw,36px);font-weight:500;letter-spacing:-.03em;line-height:1.15;color:var(--offwhite);opacity:.28;transform-origin:left center;transform:scale(.92);transition:opacity .6s var(--ease),transform .8s var(--ease)}
 .lyr.now{opacity:1;transform:scale(1)}
 .lyr.past{opacity:.4}
-.lyr-word{opacity:.42;transition:opacity .22s ease,color .22s ease,text-shadow .22s ease}
-.lyr-word.sung{opacity:.8}
-.lyr-word.word-now{opacity:1;color:var(--offwhite);text-shadow:0 0 18px rgba(250,249,246,.2);animation:word-arrive .28s var(--ease) both}
-@keyframes word-arrive{from{transform:translateY(3px);opacity:.55}to{transform:translateY(0);opacity:1}}
-@media(prefers-reduced-motion:reduce){.lyr-word{transition:none}.lyr-word.word-now{animation:none}}
+.lyr.word-sync.past{opacity:1;transform:scale(1)}
+.lyr-word{display:inline-block;opacity:.32;color:var(--grey-2);transform:translateY(0) scale(.985);transform-origin:center bottom;transition:opacity .36s cubic-bezier(.22,.8,.25,1),color .36s cubic-bezier(.22,.8,.25,1),transform .36s cubic-bezier(.22,.8,.25,1),filter .36s ease,text-shadow .36s ease}
+.lyr-word.sung{opacity:1;color:var(--offwhite);filter:brightness(1.08)}
+.lyr-word.word-now{opacity:1;color:#fff;transform:translateY(-1px) scale(1.025);filter:brightness(1.2);text-shadow:0 0 18px rgba(250,249,246,.34)}
+@media(prefers-reduced-motion:reduce){.lyr-word{transition:none}.lyr-word.word-now{transform:none}}
 
 ::view-transition-group(cover){animation-duration:700ms;animation-timing-function:cubic-bezier(0.16,1,0.3,1)}
 ::view-transition-old(root),::view-transition-new(root){animation-duration:500ms}
@@ -726,7 +726,8 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
       <label class="f" for="upLyrics">Type lyrics, or import an LRC/YAML file</label>
       <label class="btn ghost filebtn" for="lyricFile">Choose lyrics file<input class="sr" id="lyricFile" type="file" accept=".lrc,.yaml,.yml,text/plain,application/x-yaml"></label>
       <textarea id="upLyrics" maxlength="8000" placeholder="[01:38.12] The first line"></textarea>
-      <p class="field-hint">Use [MM:SS.hh] per line. Enhanced LRC and YAML with word timestamps enable word-by-word sync; regular LRC and typed lines sync by line. YAML supports start_ms values like the format below.</p>
+      <p class="field-hint">Want Apple Music-style word sync? Import enhanced LRC with &lt;word timestamps&gt;, or YAML with each word’s text and start_ms. Regular LRC, plain typing, and auto-transcribed lyrics sync by line.</p>
+      <p class="field-hint" id="lyricSyncStatus" role="status">Line sync — word timestamps have not been detected.</p>
       <details class="field-hint"><summary>YAML example</summary><pre>lines:\n  - text: Hello there\n    start_ms: 12400\n    words:\n      - text: Hello\n        start_ms: 12400\n      - text: there\n        start_ms: 12750</pre></details>
     </div>
     <p class="note mono" id="upNote" role="status"></p>
@@ -1352,12 +1353,20 @@ function syncLyricsMode(){
   $('#autoLyricsHint').hidden = mode !== 'auto';
 }
 $$('input[name="lyricMode"]').forEach(input => input.addEventListener('change', syncLyricsMode));
+function updateLyricSyncStatus(){
+  const hasWordCues = /<\d{2}:[0-5]\d\.\d{2}>/.test($('#upLyrics').value);
+  $('#lyricSyncStatus').textContent = hasWordCues
+    ? 'Word sync detected — each word lights up at its own timestamp, and stays lit.'
+    : 'Line sync — no word-level timestamps found. Add/import word cues for word-by-word highlighting.';
+}
+$('#upLyrics').addEventListener('input', updateLyricSyncStatus);
 $('#lyricFile').addEventListener('change', async e => {
   const file = e.target.files?.[0]; if (!file) return;
   const note = $('#upNote');
   try {
     if (file.size > 1024 * 1024) throw new Error('Lyrics files must be under 1 MB.');
     $('#upLyrics').value = window.importLyricsFile(file.name, await file.text());
+    updateLyricSyncStatus();
     note.textContent = `Imported ${file.name}. Check the lyrics before uploading.`;
   } catch (error){ note.textContent = error.message || 'Could not read that lyrics file.'; }
 });
@@ -1365,7 +1374,7 @@ function openUpload(){
   if (!sb) { openAuth(); return; }
   if (!state.user) return openAuth('signup');
   $('#uploadForm').reset(); $('#upPrev').hidden = true; $('#artHint').hidden = false; $('#audioLabel').firstChild.textContent = 'Choose audio';
-  syncLyricsMode(); $('#upNote').textContent = ''; openDlg($('#uploadDlg')); $('#upTitle').focus();
+  updateLyricSyncStatus(); syncLyricsMode(); $('#upNote').textContent = ''; openDlg($('#uploadDlg')); $('#upTitle').focus();
 }
 $('#upCover').addEventListener('change', e => {
   const f = e.target.files[0]; if (!f) return;
