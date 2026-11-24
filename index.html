@@ -283,8 +283,8 @@ h2.display{font-size:clamp(40px,6vw,80px);font-weight:500;letter-spacing:-.03em;
   background:var(--slate);-webkit-backdrop-filter:none;backdrop-filter:none;
 }
 .xp.open{visibility:visible;opacity:1;pointer-events:auto;transition:opacity .24s var(--ease)}
-html.cursor-on.xp-open,html.cursor-on.xp-open *{cursor:auto !important}
-html.cursor-on.xp-open button,html.cursor-on.xp-open [role=slider]{cursor:pointer !important}
+body.xp-open,body.xp-open *{cursor:auto !important}
+body.xp-open button,body.xp-open [role=slider]{cursor:pointer !important}
 .xp.open #xpCover{animation:xp-cover-reveal .46s var(--ease) both}
 .xp.open .xp-meta{animation:xp-details-reveal .38s var(--ease) .08s both}
 @keyframes xp-cover-reveal{from{opacity:.35;transform:translateY(22px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
@@ -1095,6 +1095,9 @@ function initScroll(){
   $$('.reveal').forEach(el => io.observe(el));
 
   const links = $$('.nav li a');
+  links.forEach(link => link.addEventListener('click', () => {
+    links.forEach(item => item.classList.toggle('active', item === link));
+  }));
   const navIO = new IntersectionObserver(es => es.forEach(e => {
     if (e.isIntersecting) links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + e.target.id));
   }), { rootMargin:'-45% 0px -50% 0px' });
