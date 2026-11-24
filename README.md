@@ -1,10 +1,10 @@
 # JaMusic
 
-JaMusic is the original independent music sharing and listening website, built and served through a React + Vite entry point. The full original interface and its existing playback, account, artist profile, upload, likes, and search behavior are preserved in `legacy.html` and displayed by the React app. Vite builds both pages and injects the Supabase public configuration into the original app at build time.
+JaMusic is the original music-sharing website served directly at `/` by Vite. The complete interface—playback, track discovery, artist profiles, uploads, likes, and account flows—lives on the root page; there is no iframe or secondary app URL.
 
-## Set up Supabase (required for data and accounts)
+## Supabase setup
 
-The error `Could not find the table 'public.tracks' in the schema cache` means your Supabase database has not been initialized for JaMusic yet. In the Supabase dashboard, open **SQL Editor → New query**, paste the contents of [`setup.sql`](./setup.sql), and run it. This creates the `profiles`, `tracks`, and `likes` tables, access policies, and the public `audio`, `artwork`, and `profiles` storage buckets. Refresh the website after the SQL finishes.
+Run [`setup.sql`](./setup.sql) in Supabase Dashboard → **SQL Editor** to create the `profiles`, `tracks`, and `likes` tables, access policies, and the `audio`, `artwork`, and `profiles` storage buckets.
 
 ## Local development
 
@@ -13,25 +13,19 @@ npm install
 cp .env.example .env
 ```
 
-Put your Supabase **Project URL** and **publishable key** from **Project Settings → API** in `.env`:
+Set the Supabase Project URL and publishable key in `.env`:
 
 ```dotenv
 VITE_SUPABASE_URL=https://your-project-ref.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 ```
 
-Then run:
-
-```sh
-npm run dev
-```
-
-Only a publishable key belongs in a browser app. Never use a Supabase secret/service-role key in frontend code. `.env` is ignored by Git.
+Then run `npm run dev`. The app opens at the Vite root URL. `.env` is ignored by Git. Only use a publishable key in browser code; never use the service-role secret.
 
 ## Cloudflare Pages
 
-- **Build command:** `npm run build`
-- **Build output directory:** `dist`
-- **Build environment variables:** `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`
+- Build command: `npm run build`
+- Build output directory: `dist`
+- Build environment variables: `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`
 
-Vite bakes these public values into the production build. After changing Cloudflare environment variables, trigger a fresh deployment. This frontend is a public client; the SQL file enables row-level security and owner-scoped writes, but review policies for your own deployment requirements.
+Vite builds the app directly to `dist/index.html`. Google sign-in returns to the site root (`/`).
