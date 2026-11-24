@@ -10,7 +10,7 @@ function getTranscriber(onProgress) {
       env.backends.onnx.wasm.numThreads = 1;
       return pipeline(
         'automatic-speech-recognition',
-        'onnx-community/whisper-tiny.en',
+        'onnx-community/whisper-small.en',
         {
           device: 'wasm',
           dtype: 'q8',
@@ -68,7 +68,7 @@ export async function transcribeLyrics(file, onProgress) {
   onProgress?.('Transcribing on this device…');
   const result = await transcriber(
     { data:audio, sampling_rate:16000 },
-    { chunk_length_s:30, stride_length_s:5, return_timestamps:true },
+    { language:'english', task:'transcribe', chunk_length_s:30, stride_length_s:5, return_timestamps:true },
   );
   const chunks = Array.isArray(result.chunks) ? result.chunks : [];
   const lines = chunks

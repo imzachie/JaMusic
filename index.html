@@ -709,11 +709,11 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
     </div>
     <fieldset class="lyrics-options" aria-label="Lyrics options">
       <legend>Lyrics</legend>
-      <label class="lyric-choice"><input type="radio" name="lyricMode" value="auto" checked><span><strong>Auto generated lyrics</strong><small>Free Whisper transcription, processed on this device</small></span></label>
+      <label class="lyric-choice"><input type="radio" name="lyricMode" value="auto" checked><span><strong>Auto generated lyrics</strong><small>Whisper Small English; more accurate, runs on this device</small></span></label>
       <label class="lyric-choice"><input type="radio" name="lyricMode" value="manual"><span><strong>Manual lyrics typing</strong><small>Enter timestamped lines yourself</small></span></label>
       <label class="lyric-choice"><input type="radio" name="lyricMode" value="instrumental"><span><strong>Instrumental</strong><small>Show “This song is instrumental” to listeners</small></span></label>
     </fieldset>
-    <p id="autoLyricsHint" class="field-hint">The free Whisper model runs in your browser—no API key or credits. Its first download can take a little while. Automatic transcription supports audio files up to 25 MB.</p>
+    <p id="autoLyricsHint" class="field-hint">Whisper Small English runs in your browser—no API key or credits. Its larger model download can take a while the first time. Singing can still be misheard; check the result. Automatic transcription supports audio files up to 25 MB.</p>
     <div id="manualLyricsWrap" hidden>
       <label class="f" for="upLyrics">One lyric per line, each starting with a timestamp</label>
       <textarea id="upLyrics" maxlength="8000" placeholder="[0:01] The first line (new line per lyric)"></textarea>
