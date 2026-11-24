@@ -312,7 +312,7 @@ body.xp-open button,body.xp-open [role=slider]{cursor:pointer !important}
 .lyr.now{opacity:1;transform:scale(1)}
 .lyr.past{opacity:.4}
 .lyr.word-sync.past{opacity:1;transform:scale(1)}
-.lyr-word{display:inline-block;opacity:.32;color:var(--grey-2);transform:translateY(0) scale(.985);transform-origin:center bottom;transition:opacity .36s cubic-bezier(.22,.8,.25,1),color .36s cubic-bezier(.22,.8,.25,1),transform .36s cubic-bezier(.22,.8,.25,1),filter .36s ease,text-shadow .36s ease}
+.lyr-word{display:inline-block;white-space:pre-wrap;opacity:.32;color:var(--grey-2);transform:translateY(0) scale(.985);transform-origin:center bottom;transition:opacity .36s cubic-bezier(.22,.8,.25,1),color .36s cubic-bezier(.22,.8,.25,1),transform .36s cubic-bezier(.22,.8,.25,1),filter .36s ease,text-shadow .36s ease}
 .lyr-word.sung{opacity:1;color:var(--offwhite);filter:brightness(1.08)}
 .lyr-word.word-now{opacity:1;color:#fff;transform:translateY(-1px) scale(1.025);filter:brightness(1.2);text-shadow:0 0 18px rgba(250,249,246,.34)}
 @media(prefers-reduced-motion:reduce){.lyr-word{transition:none}.lyr-word.word-now{transform:none}}
@@ -1016,7 +1016,7 @@ function renderTrack(){
   state.lyricsTimed = lines.length > 0 && lines.every(line => line.time !== null);
   const shownLyrics = lines.length ? lines : [{ time:null, text:'No lyrics for this track.' }];
   $('#lyrTrack').innerHTML = shownLyrics.map(line => {
-    const body = line.words?.length ? line.words.map(word => `<span class="lyr-word" data-word-time="${word.time}">${esc(word.text)}</span>`).join('') : esc(line.text);
+    const body = line.words?.length ? line.words.map((word, index) => `<span class="lyr-word" data-word-time="${word.time}">${esc(word.text)}</span>${index < line.words.length - 1 && !/\s$/.test(word.text) ? ' ' : ''}`).join('') : esc(line.text);
     return `<p class="lyr"${line.time === null ? '' : ` data-seek="${line.time}" tabindex="0" role="button" aria-label="Seek to ${fmt(line.time)}: ${esc(line.text)}"`}>${body}</p>`;
   }).join('');
   $('#lyrTrack').style.transform = '';
