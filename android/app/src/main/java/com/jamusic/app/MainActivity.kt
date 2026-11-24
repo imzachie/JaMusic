@@ -367,7 +367,7 @@ private data class Profile(
     val bio: String, val avatarUrl: String, val bannerUrl: String
 )
 private data class LyricWord(val text: String, val at: Double)
-private data class LyricLine(val text: String, val at: Double, val words: List<LyricWord>)
+private data class LyricLine(val text: String, val at: Double, val words: List<LyricWord>, val timed: Boolean = true)
 
 private fun formatCue(seconds: Double): String {
     val centiseconds = (seconds.coerceAtLeast(0.0) * 100).toLong()
@@ -430,20 +430,35 @@ private fun importLyricsFile(name: String, source: String): String {
     }.joinToString("\n")
 }
 
-private fun parseLyrics(raw: String): List<LyricLine> = raw.lineSequence().mapNotNull { row ->
-    val line = Regex("^\\[(\\d{2,3}):(\\d{2})\\.(\\d{2})\\](.*)$").matchEntire(row.trim()) ?: return@mapNotNull null
-    val start = line.groupValues[1].toDouble() * 60 + line.groupValues[2].toDouble() + line.groupValues[3].toDouble() / 100
-    val body = line.groupValues[4]
-    val cue = Regex("<(\\d{2}):(\\d{2})\\.(\\d{2})>")
-    val matches = cue.findAll(body).toList()
-    val words = matches.mapIndexedNotNull { index, match ->
-        val end = matches.getOrNull(index + 1)?.range?.first ?: body.length
-        val text = body.substring(match.range.last + 1, end)
-        if (text.isBlank()) null else LyricWord(text, match.groupValues[1].toDouble() * 60 + match.groupValues[2].toDouble() + match.groupValues[3].toDouble() / 100)
+private fun parseLyrics(raw: String): List<LyricLine> {
+    val linePattern = Regex("^\\[(\\d{1,3}):(\\d{2})(?:\\.(\\d{1,3}))?\\](.*)$")
+    val rows = raw.lineSequence().toList()
+    val timedTrack = rows.any { linePattern.matches(it.trim()) }
+    return rows.mapNotNull { rawRow ->
+        val row = rawRow.trim()
+        if (row.isBlank()) return@mapNotNull null
+        val line = linePattern.matchEntire(row)
+        if (line == null) {
+            if (timedTrack && row.startsWith("[") && row.contains(":") && row.contains("]")) return@mapNotNull null
+            return@mapNotNull LyricLine(row, 0.0, emptyList(), timed = false)
+        }
+        fun seconds(min: String, sec: String, fraction: String): Double {
+            val hundredths = (fraction + "00").take(2).toIntOrNull() ?: 0
+            return min.toDouble() * 60 + sec.toDouble() + hundredths / 100.0
+        }
+        val start = seconds(line.groupValues[1], line.groupValues[2], line.groupValues[3])
+        val body = line.groupValues[4]
+        val cue = Regex("<(\\d{1,3}):(\\d{2})(?:\\.(\\d{1,3}))?>")
+        val matches = cue.findAll(body).toList()
+        val words = matches.mapIndexedNotNull { index, match ->
+            val end = matches.getOrNull(index + 1)?.range?.first ?: body.length
+            val text = body.substring(match.range.last + 1, end)
+            if (text.isBlank()) null else LyricWord(text, seconds(match.groupValues[1], match.groupValues[2], match.groupValues[3]))
+        }
+        val plain = if (words.isEmpty()) body.trim() else words.joinToString("") { it.text }.trim()
+        if (plain.isBlank()) null else LyricLine(plain, start, words)
     }
-    val plain = if (words.isEmpty()) body.trim() else words.joinToString("") { it.text }.trim()
-    LyricLine(plain, start, words)
-}.toList()
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -937,7 +952,7 @@ private fun MiniPlayer(track: Track, playing: Boolean, onToggle: () -> Unit, onO
 private fun PlayerSheet(track: Track, player: ExoPlayer, playing: Boolean, currentMs: Long, durationMs: Long, isFavorite: Boolean, onFavorite: () -> Unit, onDismiss: () -> Unit, onToggle: () -> Unit, onSeek: (Long) -> Unit, onPrev: () -> Unit, onNext: () -> Unit, canEditLyrics: Boolean, onEditLyrics: () -> Unit) {
     val lines = remember(track.lyrics) { parseLyrics(track.lyrics) }
     val currentSeconds = currentMs / 1000.0
-    val currentLine = lines.indexOfLast { it.at <= currentSeconds }
+    val currentLine = if (lines.any { it.timed }) lines.indexOfLast { it.timed && it.at <= currentSeconds } else -1
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Ink, contentColor = Cloud, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), dragHandle = { BottomSheetDefaults.DragHandle(color = Muted) }) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.92f).padding(horizontal = 24.dp)) {
             Cover(track, Modifier.fillMaxWidth().aspectRatio(1f), track.title.length)
@@ -962,7 +977,7 @@ private fun PlayerSheet(track: Track, player: ExoPlayer, playing: Boolean, curre
                 itemsIndexed(lines) { index, line ->
                     val isCurrent = index == currentLine
                     val lineColor by animateColorAsState(if (isCurrent) Cloud else Muted.copy(alpha = if (index < currentLine) .43f else .58f), animationSpec = spring(stiffness = Spring.StiffnessLow), label = "line-color")
-                    Column(Modifier.fillMaxWidth().clickable { onSeek((line.at * 1000).toLong()) }.padding(vertical = 1.dp)) {
+                    Column(Modifier.fillMaxWidth().then(if (line.timed) Modifier.clickable { onSeek((line.at * 1000).toLong()) } else Modifier).padding(vertical = 1.dp)) {
                         if (line.words.isEmpty()) Text(line.text, color = lineColor, fontSize = 25.sp, lineHeight = 31.sp, fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Medium)
                         else WordLine(line.words, currentSeconds, lineColor) { wordAt -> onSeek(wordAt) }
                     }
