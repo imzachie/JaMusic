@@ -1,5 +1,19 @@
 # JaMusic
 
+## Native Android app
+
+A native Kotlin + Jetpack Compose Android app is under `android/app` (no WebView). It uses Material 3 components with an expressive dark visual system, animated lyric timing, and Media3 playback. When configured with the project's Supabase URL and publishable key it reads public tracks from `public.tracks`; without them it opens in a visual demo mode.
+
+Configure `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` in `local.properties` or as Gradle properties/environment variables. Build the **release** APK (not debug) with:
+
+```sh
+gradle :android:app:assembleRelease
+```
+
+The output is `android/app/build/outputs/apk/release/app-release.apk`. The release variant is signed with the standard debug certificate for sandbox installation/testing; it is not a Play Store signing key. GitHub Actions also builds and uploads this release APK as the `JaMusic-app-release` artifact.
+
+The Android app currently provides public-track browsing, native playback controls, and line/word-synced lyrics. Account sign-in, uploading, and editing are still available in the existing web app and have not yet been ported to Android.
+
 JaMusic is the original music-sharing website served directly at `/` by Vite. The complete interface—playback, track discovery, artist profiles, uploads, likes, and account flows—lives on the root page; there is no iframe or secondary app URL.
 
 ## Supabase setup
