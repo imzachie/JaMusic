@@ -726,8 +726,8 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
       <label class="f" for="upLyrics">Type lyrics, or import an LRC/YAML file</label>
       <label class="btn ghost filebtn" for="lyricFile">Choose lyrics file<input class="sr" id="lyricFile" type="file" accept=".lrc,.yaml,.yml,text/plain,application/x-yaml"></label>
       <textarea id="upLyrics" maxlength="8000" placeholder="[01:38.12] The first line"></textarea>
-      <p class="field-hint">Use [MM:SS.hh] per line. Enhanced LRC word cues and YAML with word timestamps enable word-by-word sync; regular LRC and typed lines sync by line.</p>
-      <details class="field-hint"><summary>YAML example</summary><pre>lines:\n  - time: 12.40\n    words:\n      - time: 12.40\n        text: Hello\n      - time: 12.75\n        text: there</pre></details>
+      <p class="field-hint">Use [MM:SS.hh] per line. Enhanced LRC and YAML with word timestamps enable word-by-word sync; regular LRC and typed lines sync by line. YAML supports start_ms values like the format below.</p>
+      <details class="field-hint"><summary>YAML example</summary><pre>lines:\n  - text: Hello there\n    start_ms: 12400\n    words:\n      - text: Hello\n        start_ms: 12400\n      - text: there\n        start_ms: 12750</pre></details>
     </div>
     <p class="note mono" id="upNote" role="status"></p>
     <div class="row-actions">
