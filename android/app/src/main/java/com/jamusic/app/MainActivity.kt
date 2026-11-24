@@ -1,17 +1,24 @@
 package com.jamusic.app
 
 import android.content.Intent
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -53,6 +60,9 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.Base64
+import org.yaml.snakeyaml.LoaderOptions
+import org.yaml.snakeyaml.Yaml
+import org.yaml.snakeyaml.constructor.SafeConstructor
 
 private val Ink = Color(0xFF111216)
 private val Panel = Color(0xFF1D1F26)
@@ -67,19 +77,28 @@ class MainActivity : ComponentActivity() {
     private lateinit var player: ExoPlayer
     var signedInAs by mutableStateOf<String?>(null)
         private set
+    var signedInUserId by mutableStateOf<String?>(null)
+        private set
     var authNotice by mutableStateOf<String?>(null)
         private set
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         player = ExoPlayer.Builder(this).build()
-        signedInAs = getSharedPreferences("session", MODE_PRIVATE).getString("email", null)
+        val session = getSharedPreferences("session", MODE_PRIVATE)
+        signedInAs = session.getString("email", null)
+        signedInUserId = session.getString("user_id", null)
         setContent {
             JaTheme {
                 JaMusicApp(
                     player = player,
                     loadTracks = { loadPublicTracks() },
                     signedInAs = signedInAs,
+                    signedInUserId = signedInUserId,
                     authNotice = authNotice,
+                    loadProfile = { id -> loadOrCreateProfile(id) },
+                    saveProfile = { profile, avatar, banner -> updateProfile(profile, avatar, banner) },
+                    uploadTrack = { title, album, genre, lyricMode, lyricText, audioUri, coverUri -> uploadTrack(title, album, genre, lyricMode, lyricText, audioUri, coverUri) },
+                    saveLyrics = { id, lyrics -> saveTrackLyrics(id, lyrics) },
                     onEmailAuth = { email, password, create -> authenticateEmail(email, password, create) },
                     onGoogleAuth = { beginGoogleSignIn() },
                     onSignOut = { signOut() }
@@ -92,34 +111,44 @@ class MainActivity : ComponentActivity() {
         check(BuildConfig.SUPABASE_URL.isNotBlank() && BuildConfig.SUPABASE_PUBLISHABLE_KEY.isNotBlank()) {
             "The app build is missing its Supabase URL or publishable key. Configure them for the release build."
         }
-        val url = BuildConfig.SUPABASE_URL.trimEnd('/') + "/rest/v1/tracks?select=*,profiles(display_name,username)&order=created_at.desc&limit=100"
-        val request = Request.Builder().url(url)
-            .header("apikey", BuildConfig.SUPABASE_PUBLISHABLE_KEY)
-            .header("Authorization", "Bearer ${BuildConfig.SUPABASE_PUBLISHABLE_KEY}")
-            .build()
-        httpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw IllegalStateException("Supabase returned ${response.code}. Check public track access and app credentials.")
-            val array = JsonParser.parseString(response.body?.string().orEmpty()).asJsonArray
-            array.mapNotNull { row ->
+        val baseUrl = BuildConfig.SUPABASE_URL.trimEnd('/')
+        val headers = { builder: Request.Builder -> builder.header("apikey", BuildConfig.SUPABASE_PUBLISHABLE_KEY).header("Authorization", "Bearer ${BuildConfig.SUPABASE_PUBLISHABLE_KEY}") }
+        // Keep this as a plain tracks query. PostgREST relationship embeds were returning HTTP 300
+        // in the app, so artist profiles are resolved with one explicit id-in query below.
+        val tracksRequest = headers(Request.Builder().url("$baseUrl/rest/v1/tracks?select=*&order=created_at.desc&limit=100")).build()
+        val tracks = httpClient.newCall(tracksRequest).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException("Supabase tracks query returned ${response.code}: ${body.take(220)}")
+            JsonParser.parseString(body).asJsonArray.mapNotNull { row ->
                 val obj = row.asJsonObject
                 val audio = obj.get("audio_url")?.takeUnless { it.isJsonNull }?.asString.orEmpty()
-                if (audio.isBlank()) null else {
-                    val profile = obj.get("profiles")?.takeUnless { it.isJsonNull }?.asJsonObject
-                    val artist = profile?.get("display_name")?.takeUnless { it.isJsonNull }?.asString
-                        ?: profile?.get("username")?.takeUnless { it.isJsonNull }?.asString ?: "JaMusic artist"
-                    Track(
-                        id = obj.get("id")?.asString.orEmpty(),
-                        title = obj.get("title")?.asString ?: "Untitled",
-                        artist = artist,
-                        album = obj.get("album")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
-                        cover = obj.get("cover_url")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
-                        audio = audio,
-                        lyrics = obj.get("lyrics")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
-                        duration = obj.get("duration")?.asLong ?: 0L
-                    )
-                }
+                if (audio.isBlank()) null else Track(
+                    id = obj.get("id")?.asString.orEmpty(),
+                    ownerId = obj.get("user_id")?.asString.orEmpty(),
+                    title = obj.get("title")?.asString ?: "Untitled",
+                    artist = "JaMusic artist",
+                    album = obj.get("album")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
+                    cover = obj.get("cover_url")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
+                    audio = audio,
+                    lyrics = obj.get("lyrics")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
+                    duration = obj.get("duration")?.asLong ?: 0L
+                )
             }
         }
+        val ownerIds = tracks.map { it.ownerId }.filter { it.isNotBlank() }.distinct()
+        if (ownerIds.isEmpty()) return@withContext tracks
+        val profileUrl = "$baseUrl/rest/v1/profiles?select=id,display_name,username&id=in.(${ownerIds.joinToString(",")})"
+        val profileRequest = headers(Request.Builder().url(profileUrl)).build()
+        val artists = httpClient.newCall(profileRequest).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) emptyMap() else JsonParser.parseString(body).asJsonArray.associate { row ->
+                val profile = row.asJsonObject
+                val id = profile.get("id")?.asString.orEmpty()
+                id to (profile.get("display_name")?.takeUnless { it.isJsonNull }?.asString
+                    ?: profile.get("username")?.takeUnless { it.isJsonNull }?.asString ?: "JaMusic artist")
+            }
+        }
+        tracks.map { it.copy(artist = artists[it.ownerId] ?: "JaMusic artist") }
     }
 
     private suspend fun authenticateEmail(email: String, password: String, createAccount: Boolean): String = withContext(Dispatchers.IO) {
@@ -135,8 +164,10 @@ class MainActivity : ComponentActivity() {
             if (accessToken.isNullOrBlank()) throw IllegalStateException("Check your email to confirm the new account, then sign in here.")
             val user = payload.getAsJsonObject("user")
             val userEmail = user?.get("email")?.takeUnless { it.isJsonNull }?.asString ?: email.trim()
-            getSharedPreferences("session", MODE_PRIVATE).edit().putString("email", userEmail).putString("access_token", accessToken).putString("refresh_token", payload.get("refresh_token")?.takeUnless { it.isJsonNull }?.asString).apply()
+            val userId = user?.get("id")?.takeUnless { it.isJsonNull }?.asString.orEmpty()
+            getSharedPreferences("session", MODE_PRIVATE).edit().putString("email", userEmail).putString("user_id", userId).putString("access_token", accessToken).putString("refresh_token", payload.get("refresh_token")?.takeUnless { it.isJsonNull }?.asString).apply()
             signedInAs = userEmail
+            signedInUserId = userId
             userEmail
         }
     }
@@ -157,9 +188,136 @@ class MainActivity : ComponentActivity() {
             .onFailure { authNotice = "Couldn't open Google sign-in. Check that a browser is installed." }
     }
 
+    private fun savedToken(): String = getSharedPreferences("session", MODE_PRIVATE).getString("access_token", null)
+        ?: throw IllegalStateException("Sign in again to continue.")
+
+    private fun authedRequest(url: String): Request.Builder = Request.Builder().url(url)
+        .header("apikey", BuildConfig.SUPABASE_PUBLISHABLE_KEY)
+        .header("Authorization", "Bearer ${savedToken()}")
+
+    private suspend fun loadOrCreateProfile(userId: String): Profile = withContext(Dispatchers.IO) {
+        val base = BuildConfig.SUPABASE_URL.trimEnd('/')
+        val get = authedRequest("$base/rest/v1/profiles?select=*&id=eq.$userId").get().build()
+        val found = httpClient.newCall(get).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException("Profile lookup failed (${response.code}): ${body.take(180)}")
+            JsonParser.parseString(body).asJsonArray.firstOrNull()?.asJsonObject
+        }
+        if (found != null) return@withContext profileFromJson(found)
+        val email = signedInAs.orEmpty()
+        val seed = userId.filter { it.isLetterOrDigit() }.takeLast(6).lowercase().ifBlank { "artist" }
+        val baseUsername = email.substringBefore('@').lowercase().replace(Regex("[^a-z0-9_]"), "_").take(12).trim('_').ifBlank { "artist" }
+        val username = "${baseUsername}_$seed".take(20)
+        val display = email.substringBefore('@').ifBlank { "Artist" }.replaceFirstChar { it.uppercase() }.take(40)
+        val payload = JSONObject().put("id", userId).put("username", username).put("display_name", display)
+        val create = authedRequest("$base/rest/v1/profiles").post(payload.toString().toRequestBody(jsonMediaType)).header("Prefer", "return=representation").build()
+        httpClient.newCall(create).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException("Profile setup failed (${response.code}): ${body.take(180)}")
+            profileFromJson(JsonParser.parseString(body).asJsonArray.first().asJsonObject)
+        }
+    }
+
+    private fun profileFromJson(obj: com.google.gson.JsonObject) = Profile(
+        id = obj.get("id")?.asString.orEmpty(),
+        username = obj.get("username")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
+        displayName = obj.get("display_name")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
+        pronouns = obj.get("pronouns")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
+        bio = obj.get("bio")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
+        avatarUrl = obj.get("avatar_url")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
+        bannerUrl = obj.get("banner_url")?.takeUnless { it.isJsonNull }?.asString.orEmpty()
+    )
+
+    private suspend fun uploadObject(uri: Uri, bucket: String, userId: String, maxBytes: Int): Pair<String, String> = withContext(Dispatchers.IO) {
+        val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw IllegalStateException("Couldn't read the selected file.")
+        if (bytes.size > maxBytes) throw IllegalArgumentException("That file is too large (${maxBytes / 1024 / 1024} MB max).")
+        val mime = contentResolver.getType(uri) ?: "application/octet-stream"
+        val ext = when (mime) { "image/jpeg" -> "jpg"; "image/png" -> "png"; "image/webp" -> "webp"; "audio/mpeg" -> "mp3"; "audio/mp4" -> "m4a"; "audio/ogg" -> "ogg"; "audio/wav" -> "wav"; else -> mime.substringAfter('/', "bin").substringBefore(';') }
+        val path = "$userId/${java.util.UUID.randomUUID()}.$ext"
+        val base = BuildConfig.SUPABASE_URL.trimEnd('/')
+        val url = "$base/storage/v1/object/$bucket/${Uri.encode(path, "/")}"
+        val request = authedRequest(url).post(bytes.toRequestBody(mime.toMediaType())).header("x-upsert", "false").build()
+        httpClient.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException("Upload to $bucket failed (${response.code}): ${body.take(180)}")
+        }
+        path to "$base/storage/v1/object/public/$bucket/${Uri.encode(path, "/")}"
+    }
+
+    private suspend fun updateProfile(profile: Profile, avatarUri: Uri?, bannerUri: Uri?): Profile = withContext(Dispatchers.IO) {
+        var avatar = profile.avatarUrl
+        var banner = profile.bannerUrl
+        if (avatarUri != null) avatar = uploadObject(avatarUri, "profiles", profile.id, 5 * 1024 * 1024).second
+        if (bannerUri != null) banner = uploadObject(bannerUri, "profiles", profile.id, 5 * 1024 * 1024).second
+        val payload = JSONObject().put("username", profile.username).put("display_name", profile.displayName)
+            .put("pronouns", profile.pronouns.ifBlank { JSONObject.NULL }).put("bio", profile.bio.ifBlank { JSONObject.NULL })
+            .put("avatar_url", avatar.ifBlank { JSONObject.NULL }).put("banner_url", banner.ifBlank { JSONObject.NULL })
+        val request = authedRequest("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/profiles?id=eq.${profile.id}")
+            .patch(payload.toString().toRequestBody(jsonMediaType)).header("Prefer", "return=minimal").build()
+        httpClient.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException("Profile save failed (${response.code}): ${body.take(180)}")
+        }
+        profile.copy(avatarUrl = avatar, bannerUrl = banner)
+    }
+
+    private suspend fun saveTrackLyrics(trackId: String, lyrics: String) = withContext(Dispatchers.IO) {
+        val payload = JSONObject().put("lyrics", lyrics.ifBlank { JSONObject.NULL })
+        val request = authedRequest("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/tracks?id=eq.$trackId")
+            .patch(payload.toString().toRequestBody(jsonMediaType)).header("Prefer", "return=minimal").build()
+        httpClient.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException("Lyrics save failed (${response.code}): ${body.take(180)}")
+        }
+    }
+
+    private suspend fun uploadTrack(title: String, album: String, genre: String, lyricMode: String, lyricText: String, audioUri: Uri?, coverUri: Uri?): String = withContext(Dispatchers.IO) {
+        val userId = signedInUserId ?: throw IllegalStateException("Sign in before uploading.")
+        val audio = audioUri ?: throw IllegalArgumentException("Choose an audio file.")
+        val cover = coverUri ?: throw IllegalArgumentException("Choose cover artwork.")
+        require(title.isNotBlank()) { "Enter a track title." }
+        val coverUpload = uploadObject(cover, "artwork", userId, 5 * 1024 * 1024)
+        val audioUpload = uploadObject(audio, "audio", userId, 50 * 1024 * 1024)
+        var lyrics = when (lyricMode) {
+            "instrumental" -> "This song is instrumental"
+            "manual" -> lyricText.trim().takeIf { it.isNotBlank() } ?: throw IllegalArgumentException("Enter or import lyrics first.")
+            else -> null
+        }
+        val durationMs = runCatching {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(this@MainActivity, audio)
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            } finally { retriever.release() }
+        }.getOrDefault(0L)
+        if (lyricMode == "auto") {
+            val payload = JSONObject().put("audio_path", audioUpload.first)
+            val request = authedRequest("${BuildConfig.SUPABASE_URL.trimEnd('/')}/functions/v1/generate-lyrics")
+                .post(payload.toString().toRequestBody(jsonMediaType)).build()
+            httpClient.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) throw IllegalStateException("Auto lyrics failed (${response.code}): ${body.take(180)}")
+                lyrics = JsonParser.parseString(body).asJsonObject.get("lyrics")?.asString
+            }
+        }
+        val row = JSONObject().put("user_id", userId).put("title", title.trim()).put("album", album.trim().ifBlank { JSONObject.NULL })
+            .put("genre", genre.trim().ifBlank { JSONObject.NULL }).put("lyrics", lyrics ?: JSONObject.NULL)
+            .put("audio_url", audioUpload.second).put("audio_path", audioUpload.first)
+            .put("cover_url", coverUpload.second).put("cover_path", coverUpload.first)
+            .put("duration", durationMs / 1000)
+        val insert = authedRequest("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/tracks")
+            .post(row.toString().toRequestBody(jsonMediaType)).header("Prefer", "return=minimal").build()
+        httpClient.newCall(insert).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException("Track publish failed (${response.code}): ${body.take(180)}")
+        }
+        "Track uploaded."
+    }
+
     private fun signOut() {
         getSharedPreferences("session", MODE_PRIVATE).edit().clear().apply()
         signedInAs = null
+        signedInUserId = null
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -173,12 +331,12 @@ class MainActivity : ComponentActivity() {
         val accessToken = params["access_token"] ?: uri.getQueryParameter("access_token")
         val error = params["error_description"] ?: uri.getQueryParameter("error_description")
         if (accessToken != null) {
-            val email = params["user_email"] ?: runCatching {
-                val claims = String(Base64.getUrlDecoder().decode(accessToken.split('.')[1]))
-                JSONObject(claims).optString("email", "Google account")
-            }.getOrDefault("Google account")
-            getSharedPreferences("session", MODE_PRIVATE).edit().putString("access_token", accessToken).putString("email", email).apply()
+            val claims = runCatching { JSONObject(String(Base64.getUrlDecoder().decode(accessToken.split('.')[1]))) }.getOrNull()
+            val email = params["user_email"] ?: claims?.optString("email")?.takeIf { it.isNotBlank() } ?: "Google account"
+            val userId = claims?.optString("sub").orEmpty()
+            getSharedPreferences("session", MODE_PRIVATE).edit().putString("access_token", accessToken).putString("user_id", userId).putString("email", email).apply()
             signedInAs = email
+            signedInUserId = userId
             authNotice = "Signed in with Google."
         } else if (error != null) authNotice = error
     }
@@ -201,10 +359,76 @@ private fun JaTheme(content: @Composable () -> Unit) {
 
 private data class Track(
     val id: String, val title: String, val artist: String, val album: String,
-    val cover: String, val audio: String, val lyrics: String, val duration: Long
+    val cover: String, val audio: String, val lyrics: String, val duration: Long,
+    val ownerId: String = ""
+)
+private data class Profile(
+    val id: String, val username: String, val displayName: String, val pronouns: String,
+    val bio: String, val avatarUrl: String, val bannerUrl: String
 )
 private data class LyricWord(val text: String, val at: Double)
 private data class LyricLine(val text: String, val at: Double, val words: List<LyricWord>)
+
+private fun formatCue(seconds: Double): String {
+    val centiseconds = (seconds.coerceAtLeast(0.0) * 100).toLong()
+    val minutes = centiseconds / 6000
+    val secs = (centiseconds / 100) % 60
+    val hundredths = centiseconds % 100
+    return "%02d:%02d.%02d".format(minutes, secs, hundredths)
+}
+
+private fun cueSeconds(value: Any?): Double? = when (value) {
+    is Number -> value.toDouble()
+    is String -> {
+        val match = Regex("^(\\d{1,3}):(\\d{2})(?:\\.(\\d{1,3}))?$").matchEntire(value.trim())
+        match?.let {
+            val fraction = (it.groupValues[3].ifBlank { "0" } + "00").take(2).toIntOrNull() ?: 0
+            it.groupValues[1].toDouble() * 60 + it.groupValues[2].toDouble() + fraction / 100.0
+        }
+    }
+    else -> null
+}
+
+private fun importLyricsFile(name: String, source: String): String {
+    val extension = name.substringAfterLast('.', "").lowercase()
+    if (extension == "lrc") {
+        val output = source.lineSequence().mapNotNull { raw ->
+            val m = Regex("^\\[(\\d{1,3}):(\\d{2})\\.(\\d{1,3})\\](.*)$").matchEntire(raw.trim()) ?: return@mapNotNull null
+            val fraction = (m.groupValues[3] + "00").take(2).toIntOrNull() ?: 0
+            val at = m.groupValues[1].toDouble() * 60 + m.groupValues[2].toDouble() + fraction / 100.0
+            var body = m.groupValues[4].trim()
+            body = Regex("<(\\d{1,3}):(\\d{2})\\.(\\d{1,3})>").replace(body) { match ->
+                val hundredths = (match.groupValues[3] + "00").take(2).toIntOrNull() ?: 0
+                val wordAt = match.groupValues[1].toDouble() * 60 + match.groupValues[2].toDouble() + hundredths / 100.0
+                "<${formatCue(wordAt)}>"
+            }
+            "[${formatCue(at)}]${if (body.startsWith("<")) "" else " "}$body"
+        }.toList()
+        if (output.isEmpty()) throw IllegalArgumentException("No timestamped lines found in that LRC file.")
+        return output.joinToString("\n")
+    }
+    if (extension != "yaml" && extension != "yml") throw IllegalArgumentException("Choose a .lrc, .yaml, or .yml file.")
+    val root = Yaml(SafeConstructor(LoaderOptions())).load<Any?>(source) as? Map<*, *>
+        ?: throw IllegalArgumentException("YAML must contain a top-level lines list.")
+    val rows = root["lines"] as? List<*> ?: throw IllegalArgumentException("YAML must contain a top-level lines list.")
+    if (rows.isEmpty()) throw IllegalArgumentException("The YAML lines list is empty.")
+    return rows.mapIndexed { index, raw ->
+        val line = raw as? Map<*, *> ?: throw IllegalArgumentException("YAML line ${index + 1} must be an object.")
+        val at = if (line["start_ms"] is Number) (line["start_ms"] as Number).toDouble() / 1000.0 else cueSeconds(line["time"] ?: line["timestamp"])
+            ?: throw IllegalArgumentException("YAML line ${index + 1} needs start_ms or time.")
+        val words = line["words"] as? List<*>
+        val text = if (!words.isNullOrEmpty()) {
+            words.mapIndexed { wordIndex, rawWord ->
+                val word = rawWord as? Map<*, *> ?: throw IllegalArgumentException("Invalid word on line ${index + 1}.")
+                val wordAt = if (word["start_ms"] is Number) (word["start_ms"] as Number).toDouble() / 1000.0 else cueSeconds(word["time"])
+                    ?: throw IllegalArgumentException("Word on line ${index + 1} needs start_ms or time.")
+                val wordText = word["text"]?.toString() ?: throw IllegalArgumentException("Word on line ${index + 1} needs text.")
+                "<${formatCue(wordAt)}>$wordText${if (wordIndex < words.lastIndex && wordText.lastOrNull()?.isWhitespace() != true) " " else ""}"
+            }.joinToString("")
+        } else (line["text"] as? String)?.trim().orEmpty().ifBlank { throw IllegalArgumentException("YAML line ${index + 1} needs text or words.") }
+        "[${formatCue(at)}]${if (text.startsWith("<")) "" else " "}$text"
+    }.joinToString("\n")
+}
 
 private fun parseLyrics(raw: String): List<LyricLine> = raw.lineSequence().mapNotNull { row ->
     val line = Regex("^\\[(\\d{2,3}):(\\d{2})\\.(\\d{2})\\](.*)$").matchEntire(row.trim()) ?: return@mapNotNull null
@@ -227,7 +451,12 @@ private fun JaMusicApp(
     player: ExoPlayer,
     loadTracks: suspend () -> List<Track>,
     signedInAs: String?,
+    signedInUserId: String?,
     authNotice: String?,
+    loadProfile: suspend (String) -> Profile,
+    saveProfile: suspend (Profile, Uri?, Uri?) -> Profile,
+    uploadTrack: suspend (String, String, String, String, String, Uri?, Uri?) -> String,
+    saveLyrics: suspend (String, String) -> Unit,
     onEmailAuth: suspend (String, String, Boolean) -> String,
     onGoogleAuth: () -> Unit,
     onSignOut: () -> Unit
@@ -250,6 +479,16 @@ private fun JaMusicApp(
     var creatingAccount by remember { mutableStateOf(false) }
     var authBusy by remember { mutableStateOf(false) }
     var authError by remember { mutableStateOf<String?>(null) }
+    var profile by remember { mutableStateOf<Profile?>(null) }
+    var profileError by remember { mutableStateOf<String?>(null) }
+    var showProfileEditor by remember { mutableStateOf(false) }
+    var profileSaving by remember { mutableStateOf(false) }
+    var showUploadPrompt by remember { mutableStateOf(false) }
+    var lyricsEditing by remember { mutableStateOf(false) }
+    var lyricsSaving by remember { mutableStateOf(false) }
+    var lyricsError by remember { mutableStateOf<String?>(null) }
+    var uploadBusy by remember { mutableStateOf(false) }
+    var uploadMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
     suspend fun refreshTracks() {
@@ -260,6 +499,14 @@ private fun JaMusicApp(
     }
     LaunchedEffect(Unit) { refreshTracks() }
     LaunchedEffect(signedInAs) { if (signedInAs != null) showAuthPrompt = false }
+    LaunchedEffect(signedInUserId) {
+        profile = null
+        profileError = null
+        if (signedInUserId != null) {
+            try { profile = loadProfile(signedInUserId) }
+            catch (error: Exception) { profileError = error.message ?: "Couldn't load your profile." }
+        }
+    }
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying }
@@ -302,8 +549,14 @@ private fun JaMusicApp(
             item {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text("JaMusic", style = MaterialTheme.typography.headlineSmall, color = Cloud, fontWeight = FontWeight.Bold)
-                    IconButton(onClick = { authError = null; showAuthPrompt = true }) {
-                        Surface(shape = CircleShape, color = Panel) { Icon(Icons.Default.AccountCircle, contentDescription = "Account and sign in", modifier = Modifier.padding(8.dp), tint = Violet) }
+                    IconButton(onClick = { if (signedInAs == null) { authError = null; showAuthPrompt = true } else showProfileEditor = true }) {
+                        Surface(shape = CircleShape, color = Panel, modifier = Modifier.size(44.dp)) {
+                            Box(contentAlignment = Alignment.Center) {
+                                val avatar = profile?.avatarUrl.orEmpty()
+                                if (avatar.isNotBlank()) AsyncImage(avatar, contentDescription = "Your profile", modifier = Modifier.fillMaxSize().clip(CircleShape))
+                                else Text(profile?.displayName?.take(1)?.uppercase() ?: "J", color = Violet, fontWeight = FontWeight.Bold)
+                            }
+                        }
                     }
                 }
             }
@@ -312,10 +565,19 @@ private fun JaMusicApp(
                     Column(Modifier.padding(horizontal = 22.dp, vertical = 12.dp)) {
                         Text("Your library", fontSize = 34.sp, lineHeight = 38.sp, letterSpacing = (-1).sp, fontWeight = FontWeight.SemiBold, color = Cloud)
                         Spacer(Modifier.height(8.dp))
-                        Text(if (signedInAs == null) "Sign in to save music and manage your account." else "Signed in as $signedInAs", color = Muted)
-                        Spacer(Modifier.height(18.dp))
+                        if (signedInAs == null) Text("Sign in to upload music and manage your artist profile.", color = Muted)
+                        else {
+                            Text(profile?.displayName ?: signedInAs, color = Muted, style = MaterialTheme.typography.titleMedium)
+                            profile?.let { Text("@${it.username}", color = Violet, style = MaterialTheme.typography.bodySmall) }
+                        }
+                        profileError?.let { Text(it, Modifier.padding(top = 6.dp), color = MaterialTheme.colorScheme.error) }
+                        Spacer(Modifier.height(16.dp))
                         if (signedInAs == null) Button(onClick = { authError = null; showAuthPrompt = true }, shape = RoundedCornerShape(24.dp)) { Text("Sign in to JaMusic") }
-                        else OutlinedButton(onClick = onSignOut, shape = RoundedCornerShape(24.dp)) { Text("Sign out") }
+                        else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { uploadMessage = null; showUploadPrompt = true }, shape = RoundedCornerShape(22.dp)) { Text("Upload track") }
+                            OutlinedButton(onClick = { showProfileEditor = true }, shape = RoundedCornerShape(22.dp), enabled = profile != null) { Text("Edit profile") }
+                            TextButton(onClick = onSignOut) { Text("Sign out") }
+                        }
                     }
                 }
                 item {
@@ -378,7 +640,9 @@ private fun JaMusicApp(
             onDismiss = { playerOpen = false }, onToggle = { if (playing) player.pause() else player.play() },
             onSeek = { player.seekTo(it) },
             onPrev = { playRelative(tracks, track, -1, player) { activeTrack = it } },
-            onNext = { playRelative(tracks, track, 1, player) { activeTrack = it } }
+            onNext = { playRelative(tracks, track, 1, player) { activeTrack = it } },
+            canEditLyrics = signedInUserId != null && signedInUserId == track.ownerId,
+            onEditLyrics = { lyricsEditing = true; lyricsError = null }
         )
     }
 
@@ -401,7 +665,192 @@ private fun JaMusicApp(
             onDismiss = { showAuthPrompt = false }
         )
     }
+    if (showProfileEditor && profile != null) {
+        ProfileEditor(
+            profile = profile!!, busy = profileSaving, error = profileError,
+            onDismiss = { showProfileEditor = false },
+            onSave = { changed, avatar, banner ->
+                scope.launch {
+                    profileSaving = true; profileError = null
+                    try { profile = saveProfile(changed, avatar, banner); showProfileEditor = false }
+                    catch (error: Exception) { profileError = error.message ?: "Couldn't save profile." }
+                    finally { profileSaving = false }
+                }
+            }
+        )
+    }
+    if (lyricsEditing && activeTrack != null) {
+        LyricsEditorDialog(
+            initialLyrics = activeTrack!!.lyrics, busy = lyricsSaving, error = lyricsError,
+            onDismiss = { lyricsEditing = false },
+            onSave = { value ->
+                scope.launch {
+                    lyricsSaving = true; lyricsError = null
+                    try {
+                        saveLyrics(activeTrack!!.id, value)
+                        activeTrack = activeTrack!!.copy(lyrics = value)
+                        tracks = tracks.map { if (it.id == activeTrack!!.id) it.copy(lyrics = value) else it }
+                        lyricsEditing = false
+                    } catch (error: Exception) { lyricsError = error.message ?: "Couldn't save lyrics." }
+                    finally { lyricsSaving = false }
+                }
+            }
+        )
+    }
+    if (showUploadPrompt) {
+        UploadPrompt(
+            busy = uploadBusy, message = uploadMessage,
+            onDismiss = { if (!uploadBusy) showUploadPrompt = false },
+            onUpload = { title, album, genre, mode, text, audio, cover ->
+                scope.launch {
+                    uploadBusy = true; uploadMessage = "Uploading files…"
+                    try {
+                        uploadMessage = uploadTrack(title, album, genre, mode, text, audio, cover)
+                        refreshTracks()
+                        showUploadPrompt = false
+                    } catch (error: Exception) { uploadMessage = error.message ?: "Couldn't upload this track." }
+                    finally { uploadBusy = false }
+                }
+            }
+        )
+    }
 }
+
+@Composable
+private fun LyricsEditorDialog(initialLyrics: String, busy: Boolean, error: String?, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var value by remember(initialLyrics) { mutableStateOf(initialLyrics) }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("Edit synced lyrics") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Edit lyrics only. Keep timestamps in [MM:SS.hh] format; enhanced word cues are preserved.", color = Muted)
+                OutlinedTextField(value, { value = it }, Modifier.fillMaxWidth().heightIn(min = 220.dp, max = 440.dp), label = { Text("Lyrics") }, minLines = 8, maxLines = 18)
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            }
+        },
+        confirmButton = { Button(onClick = { onSave(value) }, enabled = !busy) { Text(if (busy) "Saving…" else "Save lyrics") } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } }
+    )
+}
+
+@Composable
+private fun ProfileEditor(profile: Profile, busy: Boolean, error: String?, onDismiss: () -> Unit, onSave: (Profile, Uri?, Uri?) -> Unit) {
+    var username by remember(profile.id) { mutableStateOf(profile.username) }
+    var display by remember(profile.id) { mutableStateOf(profile.displayName) }
+    var pronouns by remember(profile.id) { mutableStateOf(profile.pronouns) }
+    var bio by remember(profile.id) { mutableStateOf(profile.bio) }
+    var avatarUri by remember { mutableStateOf<Uri?>(null) }
+    var bannerUri by remember { mutableStateOf<Uri?>(null) }
+    var localError by remember { mutableStateOf<String?>(null) }
+    val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { avatarUri = it }
+    val bannerPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { bannerUri = it }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit your profile") },
+        text = {
+            Column(Modifier.heightIn(max = 540.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                val context = LocalContext.current
+                val avatarModel: Any? = avatarUri ?: profile.avatarUrl.takeIf { it.isNotBlank() }
+                Box(Modifier.fillMaxWidth().height(110.dp).clip(RoundedCornerShape(20.dp)).background(Brush.linearGradient(listOf(Violet, Panel))), contentAlignment = Alignment.Center) {
+                    val bannerModel: Any? = bannerUri ?: profile.bannerUrl.takeIf { it.isNotBlank() }
+                    if (bannerModel != null) AsyncImage(bannerModel, null, Modifier.fillMaxSize())
+                    Text("Profile banner", color = Cloud)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { bannerPicker.launch(arrayOf("image/*")) }) { Text(if (bannerUri != null || profile.bannerUrl.isNotBlank()) "Change banner" else "Add banner") }
+                    OutlinedButton(onClick = { avatarPicker.launch(arrayOf("image/*")) }) { Text(if (avatarUri != null || profile.avatarUrl.isNotBlank()) "Change photo" else "Add photo") }
+                }
+                if (avatarModel != null) AsyncImage(avatarModel, "Profile photo", Modifier.size(72.dp).clip(CircleShape))
+                OutlinedTextField(display, { display = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Display name") }, singleLine = true)
+                OutlinedTextField(username, { username = it.lowercase().filter { c -> c.isLetterOrDigit() || c == '_' }.take(20) }, modifier = Modifier.fillMaxWidth(), label = { Text("Username") }, prefix = { Text("@") }, singleLine = true)
+                OutlinedTextField(pronouns, { pronouns = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Pronouns") }, singleLine = true)
+                OutlinedTextField(bio, { bio = it.take(280) }, modifier = Modifier.fillMaxWidth(), label = { Text("Bio") }, minLines = 2, maxLines = 4)
+                (localError ?: error)?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                if (username.length !in 3..20 || display.isBlank()) localError = "Enter a display name and a 3–20 character username."
+                else onSave(profile.copy(username = username, displayName = display.trim(), pronouns = pronouns.trim(), bio = bio.trim()), avatarUri, bannerUri)
+            }, enabled = !busy) { Text(if (busy) "Saving…" else "Save profile") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } }
+    )
+}
+
+@Composable
+private fun UploadPrompt(busy: Boolean, message: String?, onDismiss: () -> Unit, onUpload: (String, String, String, String, String, Uri?, Uri?) -> Unit) {
+    var title by remember { mutableStateOf("") }
+    var album by remember { mutableStateOf("") }
+    var genre by remember { mutableStateOf("") }
+    var lyrics by remember { mutableStateOf("") }
+    var mode by remember { mutableStateOf("auto") }
+    var audioUri by remember { mutableStateOf<Uri?>(null) }
+    var coverUri by remember { mutableStateOf<Uri?>(null) }
+    var lyricError by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val audioPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { audioUri = it }
+    val coverPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { coverUri = it }
+    val lyricPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            try {
+                val name = context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    val column = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else uri.lastPathSegment.orEmpty()
+                } ?: uri.lastPathSegment.orEmpty()
+                val source = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                    ?: throw IllegalStateException("Couldn't read that lyrics file.")
+                lyrics = importLyricsFile(name, source)
+                lyricError = "Imported $name. Review the cues before uploading."
+            } catch (error: Exception) { lyricError = error.message ?: "Couldn't import that lyrics file." }
+        }
+    }
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("Upload a track") },
+        text = {
+            Column(Modifier.heightIn(max = 560.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Text("Upload audio and artwork, add metadata, and choose how lyrics are added.", color = Muted)
+                OutlinedTextField(title, { title = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Track title") }, singleLine = true)
+                OutlinedTextField(album, { album = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Album (optional)") }, singleLine = true)
+                OutlinedTextField(genre, { genre = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Genre (optional)") }, singleLine = true)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { coverPicker.launch("image/*") }) { Text(if (coverUri == null) "Choose artwork" else "Artwork selected") }
+                    OutlinedButton(onClick = { audioPicker.launch("audio/*") }) { Text(if (audioUri == null) "Choose audio" else "Audio selected") }
+                }
+                Text("LYRICS", color = Violet, style = MaterialTheme.typography.labelLarge, letterSpacing = 1.6.sp)
+                listOf("auto" to "Auto-generate with JaMusic", "manual" to "Type or import lyrics", "instrumental" to "Instrumental").forEach { (value, label) ->
+                    Row(Modifier.fillMaxWidth().clickable { mode = value }, verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = mode == value, onClick = { mode = value })
+                        Text(label, color = Cloud)
+                    }
+                }
+                if (mode == "manual") {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { lyricPicker.launch(arrayOf("*/*")) }) { Text("Import LRC / YAML") }
+                    }
+                    OutlinedTextField(lyrics, { lyrics = it; lyricError = null }, modifier = Modifier.fillMaxWidth(), label = { Text("Timestamped lyrics") }, placeholder = { Text("[00:12.34] Words here") }, minLines = 4, maxLines = 8)
+                    Text("LRC, YAML start_ms word cues, or [MM:SS.hh] lines are supported.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    lyricError?.let { Text(it, color = if (it.startsWith("Imported")) Lime else MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                }
+                message?.let { Text(it, color = if (busy) Violet else MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                if (title.isBlank()) lyricError = "Enter a track title."
+                else if (coverUri == null) lyricError = "Choose artwork."
+                else if (audioUri == null) lyricError = "Choose an audio file."
+                else if (mode == "manual" && lyrics.isBlank()) lyricError = "Type lyrics or import an LRC/YAML file."
+                else onUpload(title, album, genre, mode, lyrics, audioUri, coverUri)
+            }, enabled = !busy) { Text(if (busy) "Uploading…" else "Upload") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } }
+    )
+}
+
 
 @Composable
 private fun LatestUploadCard(track: Track, onClick: () -> Unit) {
@@ -485,7 +934,7 @@ private fun MiniPlayer(track: Track, playing: Boolean, onToggle: () -> Unit, onO
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PlayerSheet(track: Track, player: ExoPlayer, playing: Boolean, currentMs: Long, durationMs: Long, isFavorite: Boolean, onFavorite: () -> Unit, onDismiss: () -> Unit, onToggle: () -> Unit, onSeek: (Long) -> Unit, onPrev: () -> Unit, onNext: () -> Unit) {
+private fun PlayerSheet(track: Track, player: ExoPlayer, playing: Boolean, currentMs: Long, durationMs: Long, isFavorite: Boolean, onFavorite: () -> Unit, onDismiss: () -> Unit, onToggle: () -> Unit, onSeek: (Long) -> Unit, onPrev: () -> Unit, onNext: () -> Unit, canEditLyrics: Boolean, onEditLyrics: () -> Unit) {
     val lines = remember(track.lyrics) { parseLyrics(track.lyrics) }
     val currentSeconds = currentMs / 1000.0
     val currentLine = lines.indexOfLast { it.at <= currentSeconds }
@@ -504,7 +953,10 @@ private fun PlayerSheet(track: Track, player: ExoPlayer, playing: Boolean, curre
                 FilledIconButton(onClick = onToggle, modifier = Modifier.size(68.dp), shape = CircleShape, colors = IconButtonDefaults.filledIconButtonColors(containerColor = Lime, contentColor = Ink)) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, null, modifier = Modifier.size(34.dp)) }
                 IconButton(onClick = onNext, modifier = Modifier.size(52.dp)) { Icon(Icons.Default.SkipNext, null, tint = Cloud, modifier = Modifier.size(31.dp)) }
             }
-            Text("LYRICS", Modifier.padding(top = 16.dp, bottom = 8.dp), color = Violet, style = MaterialTheme.typography.labelLarge, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("LYRICS", Modifier.weight(1f), color = Violet, style = MaterialTheme.typography.labelLarge, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
+                if (canEditLyrics) TextButton(onClick = onEditLyrics) { Text("Edit lyrics") }
+            }
             if (lines.isEmpty()) Text("No lyrics yet", color = Muted, style = MaterialTheme.typography.headlineSmall)
             else LazyColumn(contentPadding = PaddingValues(bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
                 itemsIndexed(lines) { index, line ->
@@ -512,7 +964,7 @@ private fun PlayerSheet(track: Track, player: ExoPlayer, playing: Boolean, curre
                     val lineColor by animateColorAsState(if (isCurrent) Cloud else Muted.copy(alpha = if (index < currentLine) .43f else .58f), animationSpec = spring(stiffness = Spring.StiffnessLow), label = "line-color")
                     Column(Modifier.fillMaxWidth().clickable { onSeek((line.at * 1000).toLong()) }.padding(vertical = 1.dp)) {
                         if (line.words.isEmpty()) Text(line.text, color = lineColor, fontSize = 25.sp, lineHeight = 31.sp, fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Medium)
-                        else WordLine(line.words, currentSeconds, lineColor)
+                        else WordLine(line.words, currentSeconds, lineColor) { wordAt -> onSeek(wordAt) }
                     }
                 }
             }
@@ -521,21 +973,27 @@ private fun PlayerSheet(track: Track, player: ExoPlayer, playing: Boolean, curre
 }
 
 @Composable
-private fun WordLine(words: List<LyricWord>, now: Double, lineColor: Color) {
+private fun WordLine(words: List<LyricWord>, now: Double, lineColor: Color, onSeek: (Long) -> Unit) {
     Row { // FlowRow is intentionally avoided: word order and spaces remain stable across line breaks.
-        androidx.compose.foundation.text.BasicText(
-            text = androidx.compose.ui.text.buildAnnotatedString {
+        val annotatedLyrics = androidx.compose.ui.text.buildAnnotatedString {
                 words.forEachIndexed { index, word ->
                     val lit = word.at <= now
                     val active = lit && (words.getOrNull(index + 1)?.at ?: Double.POSITIVE_INFINITY) > now
                     val color = when { active -> Lime; lit -> Cloud; else -> lineColor.copy(alpha = .52f) }
                     pushStyle(androidx.compose.ui.text.SpanStyle(color = color, fontWeight = if (active) FontWeight.Bold else FontWeight.Medium))
+                    pushStringAnnotation("word-time", word.at.toString())
                     append(word.text)
+                    pop()
                     pop()
                     if (index < words.lastIndex && word.text.lastOrNull()?.isWhitespace() != true) append(" ")
                 }
-            },
+        }
+        androidx.compose.foundation.text.ClickableText(
+            text = annotatedLyrics,
             style = MaterialTheme.typography.headlineSmall.copy(lineHeight = 33.sp),
+            onClick = { offset ->
+                annotatedLyrics.getStringAnnotations("word-time", offset, offset).firstOrNull()?.item?.toDoubleOrNull()?.let { onSeek((it * 1000).toLong()) }
+            },
             modifier = Modifier.fillMaxWidth()
         )
     }
