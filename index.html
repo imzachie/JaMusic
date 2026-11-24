@@ -1287,8 +1287,9 @@ $('#lyricsEditForm').addEventListener('submit', async e => {
   if (text && text !== 'This song is instrumental'){
     const lines = text.split('\n').map(line => line.trim()).filter(Boolean), timestamps = [];
     for (const line of lines){
-      const match = line.match(/^\[(\d{2}):([0-5]\d)\.(\d{2})\]\s+.+$/);
-      if (!match) return note.textContent = `Use [MM:SS.hh] before each lyric line. Invalid line: ${line}`;
+      const match = line.match(/^\[(\d{2}):([0-5]\d)\.(\d{2})\]\s*(.*)$/);
+      if (!match) return note.textContent = `Timestamp format should be [MM:SS.hh]. Invalid line: ${line}`;
+      if (!match[4].trim()) return note.textContent = `This timestamp is valid, but it has no lyric text. Add words after [${match[1]}:${match[2]}.${match[3]}] or remove that line.`;
       timestamps.push(Number(match[1]) * 60 + Number(match[2]) + Number(match[3]) / 100);
     }
     if (timestamps.some((time, index) => index > 0 && time < timestamps[index - 1])) return note.textContent = 'Put lyric timestamps in song order.';
@@ -1343,8 +1344,9 @@ $('#uploadForm').addEventListener('submit', async e => {
     const rows = manualLyrics.split('\n').map(line => line.trim()).filter(Boolean);
     const times = [];
     for (const line of rows){
-      const match = line.match(/^\[(\d{2}):([0-5]\d)\.(\d{2})\]\s+.+$/);
-      if (!match) return note.textContent = `Each line needs [MM:SS.hh] and words, like [01:38.12] The first line. Invalid line: ${line}`;
+      const match = line.match(/^\[(\d{2}):([0-5]\d)\.(\d{2})\]\s*(.*)$/);
+      if (!match) return note.textContent = `Timestamp format should be [MM:SS.hh], like [01:38.12]. Invalid line: ${line}`;
+      if (!match[4].trim()) return note.textContent = `This timestamp is valid, but it has no lyric text. Add words after [${match[1]}:${match[2]}.${match[3]}] or remove that line.`;
       times.push(Number(match[1]) * 60 + Number(match[2]) + Number(match[3]) / 100);
     }
     if (times.some((time, index) => index > 0 && time < times[index - 1])) return note.textContent = 'Put manual lyric timestamps in song order.';
