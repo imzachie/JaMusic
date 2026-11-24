@@ -1,0 +1,62 @@
+name: Android Release APK
+
+on:
+  push:
+    paths:
+      - 'android/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/android-release.yml'
+  pull_request:
+    paths:
+      - 'android/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/android-release.yml'
+  workflow_dispatch:
+
+jobs:
+  release-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Locate preinstalled Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          test -n "$ANDROID_HOME"
+          test -d "$ANDROID_HOME/cmdline-tools"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Install Android SDK platform
+        run: |
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)"
+          test -n "$SDKMANAGER"
+          "$SDKMANAGER" --install 'platforms;android-35' 'build-tools;35.0.0'
+      - name: Build signed release APK
+        shell: bash
+        run: |
+          set +e
+          gradle :android:app:assembleRelease --console=plain 2>&1 | tee android-build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -E '(^e: |error:|What went wrong:|Could not resolve|No matching variant|failed to resolve)' android-build.log | head -25 | while IFS= read -r line; do echo "::error::$line"; done
+          fi
+          exit "$status"
+      - name: Preserve build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: JaMusic-android-build-log
+          path: android-build.log
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JaMusic-app-release
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 14

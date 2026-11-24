@@ -4,6 +4,9 @@
 !.env.example
 
 # Dependencies and generated build output
+.gradle/
+local.properties
+android/**/build/
 node_modules/
 .expo/
 dist/
