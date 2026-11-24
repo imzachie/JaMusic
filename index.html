@@ -279,10 +279,12 @@ h2.display{font-size:clamp(40px,6vw,80px);font-weight:500;letter-spacing:-.03em;
 /* ---------- Expanded player (glass overlay) ---------- */
 .xp{
   position:fixed;inset:0;z-index:90;overflow:hidden;visibility:hidden;opacity:0;pointer-events:none;
-  transition:opacity .24s var(--ease),visibility 0s .24s;isolation:isolate;
+  transition:opacity .3s var(--ease),visibility 0s .3s;isolation:isolate;
   background:var(--slate);-webkit-backdrop-filter:none;backdrop-filter:none;
 }
-.xp.open{visibility:visible;opacity:1;pointer-events:auto;transition:opacity .24s var(--ease)}
+.xp.open{visibility:visible;opacity:1;pointer-events:auto;transition:opacity .3s var(--ease)}
+.xp-grid{opacity:0;transform:translateY(12px) scale(.99);transition:opacity .28s var(--ease),transform .36s var(--ease)}
+.xp.open .xp-grid{opacity:1;transform:translateY(0) scale(1)}
 body.xp-open,body.xp-open *{cursor:auto !important}
 body.xp-open button,body.xp-open [role=slider]{cursor:pointer !important}
 .xp.open #xpCover{animation:xp-cover-reveal .46s var(--ease) both}
@@ -314,9 +316,16 @@ body.xp-open button,body.xp-open [role=slider]{cursor:pointer !important}
 ::view-transition-old(root),::view-transition-new(root){animation-duration:500ms}
 
 /* ---------- Dialogs (glass) ---------- */
-dialog.modal{margin:auto;width:min(440px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;padding:var(--s4);border-radius:16px;color:var(--offwhite)}
+dialog.modal{margin:auto;width:min(440px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;padding:var(--s4);border-radius:16px;color:var(--offwhite);opacity:0;transform:translateY(14px) scale(.98);transition:opacity .2s var(--ease),transform .24s var(--ease)}
 dialog.modal.wide{width:min(600px,calc(100vw - 32px))}
-dialog.modal::backdrop{background:rgba(17,19,21,.6)}
+dialog.modal[open]:not(.closing){animation:modal-enter .26s var(--ease) both}
+dialog.modal.closing{opacity:0;transform:translateY(9px) scale(.985);pointer-events:none}
+dialog.modal::backdrop{background:rgba(17,19,21,.65);opacity:0}
+dialog.modal[open]:not(.closing)::backdrop{animation:modal-backdrop-in .22s ease both}
+dialog.modal.closing::backdrop{animation:modal-backdrop-out .2s ease both}
+@keyframes modal-enter{from{opacity:0;transform:translateY(14px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes modal-backdrop-in{from{opacity:0}to{opacity:1}}
+@keyframes modal-backdrop-out{from{opacity:1}to{opacity:0}}
 .modal h2{font-size:32px;font-weight:500;letter-spacing:-.03em;line-height:1.1}
 .modal .sub{color:var(--grey-3);margin:var(--s1) 0 var(--s3)}
 .modal label.f,.modal .f-label{display:block;font-size:13px;color:var(--grey-3);margin-bottom:6px}
@@ -764,11 +773,20 @@ let toastTimer;
 function toast(msg){ const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 4200); }
 
 /* ---------- Dialogs ---------- */
-function openDlg(d){ if (!d.open) d.showModal(); document.documentElement.classList.add('modal-open'); }
-function closeDlg(d){ if (d.open) d.close(); }
+function openDlg(d){
+  clearTimeout(d._jamCloseTimer); d._jamCloseTimer = null; d.classList.remove('closing');
+  if (!d.open) d.showModal();
+  document.documentElement.classList.add('modal-open');
+}
+function closeDlg(d){
+  if (!d.open || d.classList.contains('closing')) return;
+  d.classList.add('closing');
+  d._jamCloseTimer = setTimeout(() => { if (d.open) d.close(); d.classList.remove('closing'); d._jamCloseTimer = null; }, 220);
+}
 $$('dialog').forEach(d => {
-  d.addEventListener('close', () => { if (!$('dialog[open]')) document.documentElement.classList.remove('modal-open'); });
-  d.addEventListener('click', e => { if (e.target === d) d.close(); });
+  d.addEventListener('close', () => { clearTimeout(d._jamCloseTimer); d._jamCloseTimer = null; d.classList.remove('closing'); if (!$('dialog[open]')) document.documentElement.classList.remove('modal-open'); });
+  d.addEventListener('cancel', e => { e.preventDefault(); closeDlg(d); });
+  d.addEventListener('click', e => { if (e.target === d) closeDlg(d); });
 });
 
 /* ---------- Data ---------- */
