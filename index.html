@@ -1039,15 +1039,19 @@ function renderTime(force){
 function renderLyrics(ratio){
   const nodes = $$('.lyr'); if (!nodes.length) return;
   const has = state.lyrics && state.lyrics.length;
-  let idx = has ? Math.min(nodes.length - 1, Math.floor(ratio * nodes.length)) : 0;
+  const now = audio.currentTime || 0;
+  // Keep lyrics neutral at 0:00; activate cues only after playback reaches the song.
+  let idx = now > 0 && has ? Math.min(nodes.length - 1, Math.floor(ratio * nodes.length)) : -1;
   if (state.lyricsTimed){
-    const now = audio.currentTime || 0;
-    idx = 0;
-    for (let i = 0; i < state.lyrics.length; i++){ if (state.lyrics[i].time <= now) idx = i; else break; }
+    idx = -1;
+    if (now > 0){
+      for (let i = 0; i < state.lyrics.length; i++){ if (state.lyrics[i].time <= now) idx = i; else break; }
+    }
   }
   if (idx === lyrNow) return;
   lyrNow = idx;
-  nodes.forEach((l, n) => { l.classList.toggle('now', n === idx); l.classList.toggle('past', has && n < idx); });
+  nodes.forEach((l, n) => { l.classList.toggle('now', n === idx); l.classList.toggle('past', has && idx >= 0 && n < idx); });
+  if (idx < 0) return;
   const box = $('.lyrics'), c = nodes[idx];
   $('#lyrTrack').style.transform = `translateY(${box.clientHeight * .38 - c.offsetTop - c.offsetHeight / 2}px)`;
 }
