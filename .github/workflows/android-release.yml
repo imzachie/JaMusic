@@ -38,7 +38,22 @@ jobs:
           test -n "$SDKMANAGER"
           "$SDKMANAGER" --install 'platforms;android-35' 'build-tools;35.0.0'
       - name: Build signed release APK
-        run: gradle :android:app:assembleRelease
+        shell: bash
+        run: |
+          set +e
+          gradle :android:app:assembleRelease --console=plain 2>&1 | tee android-build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep -E '(^e: |error:|What went wrong:|Could not resolve|No matching variant|failed to resolve)' android-build.log | head -25 | while IFS= read -r line; do echo "::error::$line"; done
+          fi
+          exit "$status"
+      - name: Preserve build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: JaMusic-android-build-log
+          path: android-build.log
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
           name: JaMusic-app-release
