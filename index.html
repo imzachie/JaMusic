@@ -311,6 +311,11 @@ body.xp-open button,body.xp-open [role=slider]{cursor:pointer !important}
 .lyr{font-size:clamp(24px,2.8vw,36px);font-weight:500;letter-spacing:-.03em;line-height:1.15;color:var(--offwhite);opacity:.28;transform-origin:left center;transform:scale(.92);transition:opacity .6s var(--ease),transform .8s var(--ease)}
 .lyr.now{opacity:1;transform:scale(1)}
 .lyr.past{opacity:.4}
+.lyr-word{opacity:.42;transition:opacity .22s ease,color .22s ease,text-shadow .22s ease}
+.lyr-word.sung{opacity:.8}
+.lyr-word.word-now{opacity:1;color:var(--offwhite);text-shadow:0 0 18px rgba(250,249,246,.2);animation:word-arrive .28s var(--ease) both}
+@keyframes word-arrive{from{transform:translateY(3px);opacity:.55}to{transform:translateY(0);opacity:1}}
+@media(prefers-reduced-motion:reduce){.lyr-word{transition:none}.lyr-word.word-now{animation:none}}
 
 ::view-transition-group(cover){animation-duration:700ms;animation-timing-function:cubic-bezier(0.16,1,0.3,1)}
 ::view-transition-old(root),::view-transition-new(root){animation-duration:500ms}
@@ -718,9 +723,11 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
     </fieldset>
     <p id="autoLyricsHint" class="field-hint">Groq Whisper large-v3 generates timestamped lyrics. This uses your Supabase-hosted Groq key; configure it once in Supabase Function secrets. Audio files must be 25 MB or smaller. Singing can still be misheard, so check the transcript.</p>
     <div id="manualLyricsWrap" hidden>
-      <label class="f" for="upLyrics">One lyric per line, each starting with a timestamp</label>
+      <label class="f" for="upLyrics">Type lyrics, or import an LRC/YAML file</label>
+      <label class="btn ghost filebtn" for="lyricFile">Choose lyrics file<input class="sr" id="lyricFile" type="file" accept=".lrc,.yaml,.yml,text/plain,application/x-yaml"></label>
       <textarea id="upLyrics" maxlength="8000" placeholder="[01:38.12] The first line"></textarea>
-      <p class="field-hint">Format every line as [MM:SS.hh] followed by the words. Example: [01:38.12] The... Start a new line for each lyric.</p>
+      <p class="field-hint">Use [MM:SS.hh] per line. Enhanced LRC word cues and YAML with word timestamps enable word-by-word sync; regular LRC and typed lines sync by line.</p>
+      <details class="field-hint"><summary>YAML example</summary><pre>lines:\n  - time: 12.40\n    words:\n      - time: 12.40\n        text: Hello\n      - time: 12.75\n        text: there</pre></details>
     </div>
     <p class="note mono" id="upNote" role="status"></p>
     <div class="row-actions">
@@ -780,6 +787,7 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
 </dialog>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script type="module" src="/lyrics-import.js"></script>
 <script>
 /* ==========================================================================
    JaMusic | vanilla JS + Supabase (auth, database, storage)
@@ -801,9 +809,24 @@ const bgUrl = u => `url("${String(u).replace(/"/g, '%22')}")`;
 function parseLyricLine(line){
   const text = String(line).trim();
   let match = text.match(/^\[(\d{2}):([0-5]\d)\.(\d{2})\]\s*(.*)$/);
-  if (match) return { time:Number(match[1]) * 60 + Number(match[2]) + Number(match[3]) / 100, text:match[4] };
-  match = text.match(/^\[(\d{1,3}):([0-5]\d)\]\s*(.*)$/); // read older saved lyrics too
-  return match ? { time:Number(match[1]) * 60 + Number(match[2]), text:match[3] } : { time:null, text };
+  if (!match) match = text.match(/^\[(\d{1,3}):([0-5]\d)\]\s*(.*)$/); // read older saved lyrics too
+  if (!match) return { time:null, text };
+  const hasCenti = match.length === 5;
+  const time = Number(match[1]) * 60 + Number(match[2]) + (hasCenti ? Number(match[3]) / 100 : 0);
+  const body = hasCenti ? match[4] : match[3];
+  const words = [];
+  const cue = /<(\d{2}):([0-5]\d)\.(\d{2})>/g;
+  let last = 0, part;
+  while ((part = cue.exec(body))){
+    const wordText = body.slice(last, part.index);
+    if (wordText) words.push({ time:Number(part[1]) * 60 + Number(part[2]) + Number(part[3]) / 100, text:wordText });
+    last = cue.lastIndex;
+  }
+  if (words.length){
+    const rest = body.slice(last); if (rest) words.push({ time:words.at(-1).time, text:rest });
+    return { time, text:words.map(word => word.text).join(''), words };
+  }
+  return { time, text:body };
 }
 
 const configured = !!(SUPABASE_URL && SUPABASE_PUBLISHABLE_KEY && window.supabase);
@@ -991,7 +1014,10 @@ function renderTrack(){
   state.lyrics = lines;
   state.lyricsTimed = lines.length > 0 && lines.every(line => line.time !== null);
   const shownLyrics = lines.length ? lines : [{ time:null, text:'No lyrics for this track.' }];
-  $('#lyrTrack').innerHTML = shownLyrics.map(line => `<p class="lyr"${line.time === null ? '' : ` data-seek="${line.time}" tabindex="0" role="button" aria-label="Seek to ${fmt(line.time)}: ${esc(line.text)}"`}>${esc(line.text)}</p>`).join('');
+  $('#lyrTrack').innerHTML = shownLyrics.map(line => {
+    const body = line.words?.length ? line.words.map(word => `<span class="lyr-word" data-word-time="${word.time}">${esc(word.text)}</span>`).join('') : esc(line.text);
+    return `<p class="lyr"${line.time === null ? '' : ` data-seek="${line.time}" tabindex="0" role="button" aria-label="Seek to ${fmt(line.time)}: ${esc(line.text)}"`}>${body}</p>`;
+  }).join('');
   $('#lyrTrack').style.transform = '';
   lyrNow = -1;
   document.title = `${t.title} / JaMusic`;
@@ -1029,12 +1055,20 @@ function renderTime(force){
   const t = audio.currentTime || 0, d = dur();
   scrubbers.forEach(s => s.paint());
   const sec = Math.floor(t);
+  renderWordSync(t);
   if (sec === lastSecond && !force) return;
   lastSecond = sec;
   $$('[data-cur]').forEach(e => e.textContent = fmt(t));
   $$('[data-dur]').forEach(e => e.textContent = fmt(d));
   $$('[data-cur-of]').forEach(e => e.textContent = `${fmt(t)} / ${fmt(d)}`);
   renderLyrics(d ? t / d : 0);
+}
+function renderWordSync(now){
+  $$('.lyr-word').forEach(word => {
+    const active = Number(word.dataset.wordTime) <= now;
+    word.classList.toggle('sung', active);
+    word.classList.toggle('word-now', active && Number(word.dataset.wordTime) <= now && (!word.nextElementSibling || Number(word.nextElementSibling.dataset.wordTime) > now));
+  });
 }
 function renderLyrics(ratio){
   const nodes = $$('.lyr'); if (!nodes.length) return;
@@ -1318,6 +1352,15 @@ function syncLyricsMode(){
   $('#autoLyricsHint').hidden = mode !== 'auto';
 }
 $$('input[name="lyricMode"]').forEach(input => input.addEventListener('change', syncLyricsMode));
+$('#lyricFile').addEventListener('change', async e => {
+  const file = e.target.files?.[0]; if (!file) return;
+  const note = $('#upNote');
+  try {
+    if (file.size > 1024 * 1024) throw new Error('Lyrics files must be under 1 MB.');
+    $('#upLyrics').value = window.importLyricsFile(file.name, await file.text());
+    note.textContent = `Imported ${file.name}. Check the lyrics before uploading.`;
+  } catch (error){ note.textContent = error.message || 'Could not read that lyrics file.'; }
+});
 function openUpload(){
   if (!sb) { openAuth(); return; }
   if (!state.user) return openAuth('signup');
