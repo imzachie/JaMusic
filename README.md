@@ -30,8 +30,17 @@ Then run `npm run dev`. The app opens at the Vite root URL. `.env` is ignored by
 
 Vite builds the app directly to `dist/index.html`. Google sign-in returns to the site root (`/`).
 
-## Free Whisper auto-generated lyrics
+## Groq Whisper auto-generated lyrics
 
-Automatic transcription uses the open `onnx-community/whisper-small.en` model via Transformers.js and runs locally in the user's browser. It does not call a paid inference API, need an API key, or send the audio to a transcription service. Small is larger and generally more accurate than Tiny, but requires a substantial first-time model download and more CPU/memory; the browser caches it afterward. It is English-focused. Speech recognition can still mishear singing, so review auto-generated lyrics; use Manual lyrics typing when exact words matter. Automatic mode is limited to audio files of 25 MB; manual and instrumental modes work without the model download.
+Automatic transcription uses Groq's `whisper-large-v3` endpoint through the Supabase Edge Function at `supabase/functions/generate-lyrics`. The Groq key is kept server-side as a Supabase Function Secret; it is never included in the website bundle. Create a Groq API key in your Groq Console, then deploy the function and save the key:
 
-Auto-generated and manual lyrics are stored with `[minutes:seconds]` timestamps. In the player, each timestamped line is synchronized to playback and can be clicked to seek to that point.
+```sh
+npx supabase login
+npx supabase link --project-ref YOUR_SUPABASE_PROJECT_REF
+npx supabase functions deploy generate-lyrics
+npx supabase secrets set GROQ_API_KEY=YOUR_GROQ_API_KEY
+```
+
+Replace both placeholders with your actual values. Groq offers API access subject to its current account limits and usage policies; API key access is required. Audio files must be 25 MB or smaller for auto transcription. Manual and instrumental lyric choices do not call Groq.
+
+Auto-generated and manual lyrics are stored with `[minutes:seconds]` timestamps. In the player, each timestamped line is synchronized to playback and can be clicked to seek to that point. Transcription models can still mishear singing; review the generated text.
