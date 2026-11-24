@@ -337,7 +337,7 @@ private fun WordLine(words: List<LyricWord>, now: Double, lineColor: Color) {
                     pushStyle(androidx.compose.ui.text.SpanStyle(color = color, fontWeight = if (active) FontWeight.Bold else FontWeight.Medium))
                     append(word.text)
                     pop()
-                    if (index < words.lastIndex && !word.text.lastOrNull().isWhitespace()) append(" ")
+                    if (index < words.lastIndex && word.text.lastOrNull()?.isWhitespace() != true) append(" ")
                 }
             },
             style = MaterialTheme.typography.headlineSmall.copy(lineHeight = 33.sp),
