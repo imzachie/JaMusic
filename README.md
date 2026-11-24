@@ -29,3 +29,14 @@ Then run `npm run dev`. The app opens at the Vite root URL. `.env` is ignored by
 - Build environment variables: `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`
 
 Vite builds the app directly to `dist/index.html`. Google sign-in returns to the site root (`/`).
+
+## Whisper auto-generated lyrics
+
+Auto transcription runs server-side so the OpenAI credential is never exposed in the browser. Deploy the included Supabase Edge Function and set the key as a Supabase secret:
+
+```sh
+supabase functions deploy generate-lyrics
+supabase secrets set OPENAI_API_KEY=your_openai_api_key
+```
+
+The function downloads the just-uploaded audio from the user's own `audio` storage folder, asks Whisper for timestamped segments, and returns `[minutes:seconds] lyric` lines. Audio files for auto transcription must be 25 MB or smaller. Manual lyrics and the instrumental option don't call the transcription service. Never put the OpenAI key in the site's Vite environment variables.

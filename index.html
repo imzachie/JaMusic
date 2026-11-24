@@ -210,7 +210,7 @@ h2.display{font-size:clamp(40px,6vw,80px);font-weight:500;letter-spacing:-.03em;
 .album span{display:block;color:var(--grey-2);font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .empty{color:var(--grey-2);padding:var(--s3) 0}
 #discover{position:relative;isolation:isolate;overflow:hidden}
-#discover::before{content:"";position:absolute;z-index:-1;inset:-12% -8%;pointer-events:none;background-image:var(--accent-artwork);background-position:center 25%;background-size:cover;filter:blur(72px) saturate(1.25);opacity:.2;transform:scale(1.08);mask-image:linear-gradient(180deg,transparent 0%,#000 18%,#000 70%,transparent 100%);transition:opacity .8s ease,background-image .8s ease}
+#discover::before{content:"";position:absolute;z-index:-1;inset:-12% -8%;pointer-events:none;background-image:var(--accent-artwork);background-position:left center,33% center,66% center,right center;background-size:42% 100%;background-repeat:no-repeat;filter:blur(76px) saturate(1.35);opacity:.24;transform:scale(1.12);mask-image:linear-gradient(180deg,transparent 0%,#000 18%,#000 70%,transparent 100%);transition:opacity .8s ease,background-image .8s ease}
 #discover:not(.has-accent-artwork)::before{opacity:0}
 .list-wrap{margin-top:var(--s12)}
 
@@ -314,6 +314,21 @@ body.xp-open button,body.xp-open [role=slider]{cursor:pointer !important}
 
 ::view-transition-group(cover){animation-duration:700ms;animation-timing-function:cubic-bezier(0.16,1,0.3,1)}
 ::view-transition-old(root),::view-transition-new(root){animation-duration:500ms}
+
+/* Upload details and lyric modes */
+.upload-warning{margin:0 0 var(--s3);padding:12px 14px;border:1px solid rgba(239,190,113,.3);border-radius:9px;background:rgba(239,190,113,.08);color:#e6d2b5;font-size:13px;line-height:1.5}
+.upload-warning strong{color:#f3dfbf}
+.lyrics-options{border:0;padding:0;margin:var(--s3) 0 var(--s2);display:grid;gap:8px}
+.lyrics-options legend{font-size:13px;color:var(--grey-3);margin-bottom:8px}
+.lyric-choice{display:flex;align-items:center;gap:11px;padding:11px 13px;border:1px solid var(--hairline);border-radius:9px;background:rgba(31,35,39,.72);cursor:pointer}
+.lyric-choice:has(input:checked){border-color:rgba(250,249,246,.48);background:rgba(250,249,246,.08)}
+.lyric-choice input{accent-color:var(--offwhite);flex:none}
+.lyric-choice span{display:flex;flex-direction:column;gap:2px}
+.lyric-choice strong{font-size:13px;font-weight:500;color:var(--offwhite)}
+.lyric-choice small,.field-hint{color:var(--grey-2);font-size:12px;line-height:1.5}
+.field-hint{margin:-8px 0 var(--s2)}
+.lyr[data-seek]{cursor:pointer;}
+.lyr[data-seek]:hover{opacity:1;color:var(--offwhite)}
 
 /* ---------- Dialogs (glass) ---------- */
 dialog.modal{margin:auto;width:min(440px,calc(100vw - 32px));max-height:calc(100vh - 32px);overflow:auto;padding:var(--s4);border-radius:16px;color:var(--offwhite);opacity:0;transform:translateY(14px) scale(.98);transition:opacity .2s var(--ease),transform .24s var(--ease)}
@@ -666,6 +681,7 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
   <form id="uploadForm" novalidate>
     <h2 id="upTitleH">Upload a track</h2>
     <p class="sub">It shows up on JaMusic under your display name as soon as it finishes uploading.</p>
+    <p class="upload-warning"><strong>Before you upload:</strong> The changes is irreversible and you can't edit it after uploading. Check your details carefully</p>
     <div class="up-top">
       <label class="art-pick" id="artPick">
         <span id="artHint">Choose artwork<br>JPG, PNG or WebP, up to 5 MB</span>
@@ -690,8 +706,18 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
         <label class="btn ghost full filebtn" for="upAudio" id="audioLabel">Choose audio<input class="sr" id="upAudio" type="file" accept="audio/*" required></label>
       </div>
     </div>
-    <label class="f" for="upLyrics" style="margin-top:var(--s2)">Lyrics (optional, one line per row, shown in time with the song)</label>
-    <textarea id="upLyrics" maxlength="8000" placeholder="Paste your lyrics here"></textarea>
+    <fieldset class="lyrics-options" aria-label="Lyrics options">
+      <legend>Lyrics</legend>
+      <label class="lyric-choice"><input type="radio" name="lyricMode" value="auto" checked><span><strong>Auto generated lyrics</strong><small>Transcribe this track with Whisper AI</small></span></label>
+      <label class="lyric-choice"><input type="radio" name="lyricMode" value="manual"><span><strong>Manual lyrics typing</strong><small>Enter timestamped lines yourself</small></span></label>
+      <label class="lyric-choice"><input type="radio" name="lyricMode" value="instrumental"><span><strong>Instrumental</strong><small>Show “This song is instrumental” to listeners</small></span></label>
+    </fieldset>
+    <p id="autoLyricsHint" class="field-hint">Whisper will generate timestamped lyrics after upload. Automatic transcription supports audio files up to 25 MB.</p>
+    <div id="manualLyricsWrap" hidden>
+      <label class="f" for="upLyrics">One lyric per line, each starting with a timestamp</label>
+      <textarea id="upLyrics" maxlength="8000" placeholder="[0:01] The first line (new line per lyric)"></textarea>
+      <p class="field-hint">Use [minutes:seconds] followed by the words. Example: [0:01] The... Each new line needs its own timestamp.</p>
+    </div>
     <p class="note mono" id="upNote" role="status"></p>
     <div class="row-actions">
       <button class="btn ghost" type="button" id="upCancel">Cancel</button>
@@ -861,8 +887,8 @@ function rowHTML(idx){
 }
 function renderLists(){
   const shown = state.tracks.map((t, i) => [t, i]).filter(([t]) => matches(t));
-  const discover = $('#discover'), accent = shown.find(([t]) => t.cover_url)?.[0]?.cover_url;
-  if (accent){ discover.style.setProperty('--accent-artwork', bgUrl(accent)); discover.classList.add('has-accent-artwork'); }
+  const discover = $('#discover'), accents = shown.map(([t]) => t.cover_url).filter(Boolean).slice(0, 4);
+  if (accents.length){ discover.style.setProperty('--accent-artwork', accents.map(bgUrl).join(', ')); discover.classList.add('has-accent-artwork'); }
   else { discover.style.removeProperty('--accent-artwork'); discover.classList.remove('has-accent-artwork'); }
   $('#rail').innerHTML = shown.map(([t, i], n) => `
     <button class="album load" style="--d:${Math.min(n, 8) * 60}ms" role="listitem" data-cover data-play="${i}" aria-label="Play ${esc(t.title)} by ${esc(artistName(t))}">
@@ -932,9 +958,16 @@ function renderTrack(){
   $$('[data-cover-img]').forEach(e => { e.src = t.cover_url; e.alt = `Artwork for ${t.title}`; });
   $$('[data-vlabel]').forEach(e => e.style.backgroundImage = bgUrl(t.cover_url));
   crossfade($('#heroBg'), t.cover_url); crossfade($('#xpBg'), t.cover_url);
-  const lines = (t.lyrics || '').split('\n').map(l => l.trim()).filter(Boolean);
+  const rawLyrics = (t.lyrics || '').trim();
+  const lines = rawLyrics.split('\n').map(l => l.trim()).filter(Boolean).map(text => {
+    const match = text.match(/^\[(\d{1,3}):([0-5]\d)\]\s*(.*)$/);
+    return match ? { time:Number(match[1]) * 60 + Number(match[2]), text:match[3] } : { time:null, text };
+  });
   state.lyrics = lines;
-  $('#lyrTrack').innerHTML = (lines.length ? lines : ['No lyrics for this track.']).map(l => `<p class="lyr">${esc(l)}</p>`).join('');
+  state.lyricsTimed = lines.length > 0 && lines.every(line => line.time !== null);
+  const shownLyrics = lines.length ? lines : [{ time:null, text:'No lyrics for this track.' }];
+  $('#lyrTrack').innerHTML = shownLyrics.map(line => `<p class="lyr"${line.time === null ? '' : ` data-seek="${line.time}" tabindex="0" role="button" aria-label="Seek to ${fmt(line.time)}: ${esc(line.text)}"`}>${esc(line.text)}</p>`).join('');
+  $('#lyrTrack').style.transform = '';
   lyrNow = -1;
   document.title = `${t.title} / JaMusic`;
   markCurrent(); renderLikes(); renderTime(true);
@@ -981,7 +1014,12 @@ function renderTime(force){
 function renderLyrics(ratio){
   const nodes = $$('.lyr'); if (!nodes.length) return;
   const has = state.lyrics && state.lyrics.length;
-  const idx = has ? Math.min(nodes.length - 1, Math.floor(ratio * nodes.length)) : 0;
+  let idx = has ? Math.min(nodes.length - 1, Math.floor(ratio * nodes.length)) : 0;
+  if (state.lyricsTimed){
+    const now = audio.currentTime || 0;
+    idx = 0;
+    for (let i = 0; i < state.lyrics.length; i++){ if (state.lyrics[i].time <= now) idx = i; else break; }
+  }
   if (idx === lyrNow) return;
   lyrNow = idx;
   nodes.forEach((l, n) => { l.classList.toggle('now', n === idx); l.classList.toggle('past', has && n < idx); });
@@ -1205,11 +1243,17 @@ $('#authForm').addEventListener('submit', async e => {
 });
 
 /* ---------- Upload ---------- */
+function syncLyricsMode(){
+  const mode = $('input[name="lyricMode"]:checked')?.value || 'auto';
+  $('#manualLyricsWrap').hidden = mode !== 'manual';
+  $('#autoLyricsHint').hidden = mode !== 'auto';
+}
+$$('input[name="lyricMode"]').forEach(input => input.addEventListener('change', syncLyricsMode));
 function openUpload(){
   if (!sb) { openAuth(); return; }
   if (!state.user) return openAuth('signup');
   $('#uploadForm').reset(); $('#upPrev').hidden = true; $('#artHint').hidden = false; $('#audioLabel').firstChild.textContent = 'Choose audio';
-  $('#upNote').textContent = ''; openDlg($('#uploadDlg')); $('#upTitle').focus();
+  syncLyricsMode(); $('#upNote').textContent = ''; openDlg($('#uploadDlg')); $('#upTitle').focus();
 }
 $('#upCover').addEventListener('change', e => {
   const f = e.target.files[0]; if (!f) return;
@@ -1221,22 +1265,54 @@ $('#uploadForm').addEventListener('submit', async e => {
   e.preventDefault();
   const note = $('#upNote'), btn = $('#upSubmit');
   const cover = $('#upCover').files[0], file = $('#upAudio').files[0], title = $('#upTitle').value.trim();
+  const mode = $('input[name="lyricMode"]:checked')?.value || 'auto';
+  const manualLyrics = $('#upLyrics').value.trim();
   if (!cover) return note.textContent = 'Add artwork for your track.';
   if (!file) return note.textContent = 'Choose the audio file.';
   if (!title) return note.textContent = 'Give your track a title.';
   if (cover.size > 5 * 1024 * 1024) return note.textContent = 'Artwork must be under 5 MB.';
   if (file.size > 50 * 1024 * 1024) return note.textContent = 'Audio must be under 50 MB.';
+  if (mode === 'auto' && file.size > 25 * 1024 * 1024) return note.textContent = 'Whisper transcription supports audio files up to 25 MB. Choose Manual lyrics typing or Instrumental for larger files.';
+  let lyrics = null;
+  if (mode === 'manual'){
+    if (!manualLyrics) return note.textContent = 'Enter at least one timestamped lyric line.';
+    const rows = manualLyrics.split('\n').map(line => line.trim()).filter(Boolean);
+    const times = [];
+    for (const line of rows){
+      const match = line.match(/^\[(\d{1,3}):([0-5]\d)\]\s+.+$/);
+      if (!match) return note.textContent = `Each line needs a timestamp and words, like [0:01] The first line. Invalid line: ${line}`;
+      times.push(Number(match[1]) * 60 + Number(match[2]));
+    }
+    if (times.some((time, index) => index > 0 && time < times[index - 1])) return note.textContent = 'Put manual lyric timestamps in song order.';
+    lyrics = rows.join('\n');
+  } else if (mode === 'instrumental') lyrics = 'This song is instrumental';
+
   btn.disabled = true;
-  let c, a;
+  let c, a, published = false;
   try {
     note.textContent = 'Uploading artwork...'; c = await uploadFile('artwork', cover, 'cover');
     note.textContent = 'Uploading audio. Larger files take a moment...'; a = await uploadFile('audio', file, 'track');
     const duration = await audioDuration(file);
+    if (mode === 'manual' && duration && manualLyrics.split('\n').some(line => {
+      const m = line.trim().match(/^\[(\d{1,3}):([0-5]\d)\]/); return m && Number(m[1]) * 60 + Number(m[2]) > duration;
+    })) throw new Error('A lyric timestamp is later than the end of this song. Check the timestamps and try again.');
+    if (mode === 'auto'){
+      note.textContent = 'Generating timestamped lyrics with Whisper...';
+      const { data, error } = await sb.functions.invoke('generate-lyrics', { body:{ audio_path:a.path } });
+      if (error){
+        let detail = null;
+        try { detail = await error.context?.json(); } catch {}
+        throw new Error(detail?.error || error.message || 'Could not generate lyrics. Deploy the generate-lyrics Supabase function and configure its OpenAI key.');
+      }
+      lyrics = data?.lyrics?.trim();
+      if (!lyrics) throw new Error('Whisper did not return lyrics for this file. Try Manual lyrics typing or choose Instrumental.');
+    }
     note.textContent = 'Publishing...';
     const { error } = await sb.from('tracks').insert({
       user_id:state.user.id, title, album:$('#upAlbum').value.trim() || null, genre:$('#upGenre').value.trim() || null,
-      lyrics:$('#upLyrics').value.trim() || null, audio_url:a.url, audio_path:a.path, cover_url:c.url, cover_path:c.path, duration });
+      lyrics, audio_url:a.url, audio_path:a.path, cover_url:c.url, cover_path:c.path, duration });
     if (error) throw error;
+    published = true;
     closeDlg($('#uploadDlg'));
     await reloadTracks();
     const idx = state.tracks.findIndex(t => t.audio_path === a.path);
@@ -1245,9 +1321,11 @@ $('#uploadForm').addEventListener('submit', async e => {
     $('#discover').scrollIntoView({ behavior: reduced ? 'auto' : 'smooth' });
   } catch (err){
     note.textContent = err.message || 'Upload failed. Try again.';
-    if (c && !a) sb.storage.from('artwork').remove([c.path]);
-  }
-  btn.disabled = false;
+    if (!published){
+      if (a) await sb.storage.from('audio').remove([a.path]);
+      if (c) await sb.storage.from('artwork').remove([c.path]);
+    }
+  } finally { btn.disabled = false; }
 });
 
 /* ---------- Profile ---------- */
@@ -1315,6 +1393,8 @@ const volScrub = makeScrubber($('#volScrub'), () => state.muted ? 0 : state.vol,
   r => { state.vol = r; state.muted = r === 0; audio.volume = r; audio.muted = state.muted; paintVolume(); }, .05);
 
 document.addEventListener('click', e => {
+  const lyric = e.target.closest('.lyr[data-seek]');
+  if (lyric){ audio.currentTime = Number(lyric.dataset.seek); lyrNow = -1; renderTime(true); return; }
   const act = e.target.closest('[data-act]');
   if (act && act.dataset.act){
     e.preventDefault();
@@ -1354,6 +1434,8 @@ $('#footAccount').addEventListener('click', () => state.user ? openProfile() : o
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape'){ if (xpOpen && !$('dialog[open]')) setXp(false); return; }
+  const lyric = e.target.closest && e.target.closest('.lyr[data-seek]');
+  if (lyric && (e.key === 'Enter' || e.code === 'Space')){ e.preventDefault(); audio.currentTime = Number(lyric.dataset.seek); lyrNow = -1; renderTime(true); return; }
   const tag = (e.target.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || tag === 'select' || $('dialog[open]')) return;
   if (e.code === 'Space' && !e.target.closest('button,a,[role=slider]')){ e.preventDefault(); toggle(); }
