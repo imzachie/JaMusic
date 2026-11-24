@@ -68,8 +68,11 @@ Deno.serve(async request => {
   const lyrics = segments
     .filter((segment: { text?: unknown; start?: unknown }) => typeof segment.text === 'string' && segment.text.trim() && Number.isFinite(Number(segment.start)))
     .map((segment: { text: string; start: number }) => {
-      const seconds = Math.max(0, Math.floor(segment.start));
-      return `[${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}] ${segment.text.trim()}`;
+      const totalCentiseconds = Math.max(0, Math.floor(Number(segment.start) * 100));
+      const minutes = Math.floor(totalCentiseconds / 6000);
+      const seconds = Math.floor(totalCentiseconds / 100) % 60;
+      const centiseconds = totalCentiseconds % 100;
+      return `[${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(centiseconds).padStart(2, '0')}] ${segment.text.trim()}`;
     })
     .join('\n');
   if (!lyrics) return json({ error: 'Groq returned no speech. Try Manual lyrics typing or choose Instrumental.' }, 422);

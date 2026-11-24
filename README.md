@@ -43,4 +43,4 @@ npx supabase secrets set GROQ_API_KEY=YOUR_GROQ_API_KEY
 
 Replace both placeholders with your actual values. Groq offers API access subject to its current account limits and usage policies; API key access is required. Audio files must be 25 MB or smaller for auto transcription. Manual and instrumental lyric choices do not call Groq.
 
-Auto-generated and manual lyrics are stored with `[minutes:seconds]` timestamps. In the player, each timestamped line is synchronized to playback and can be clicked to seek to that point. Transcription models can still mishear singing; review the generated text.
+Auto-generated and manual lyrics are stored as `[MM:SS.hh]` lines (for example `[01:38.12] The lyric`). In the player, each timestamped line is synchronized to playback and can be clicked to seek to that point. Track owners can edit only the lyrics from the track row or fullscreen player. The updated `setup.sql` revokes table-wide track updates and grants owners permission to update only the `lyrics` column; rerun it in Supabase to apply that database-level restriction. Transcription can still mishear singing, so review the generated text.
