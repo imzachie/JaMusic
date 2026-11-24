@@ -33,17 +33,22 @@ function parseLrc(source) {
 }
 
 function yamlToLyrics(source) {
-  const data = load(source, { schema: JSON_SCHEMA });
+  // Accept escaped underscores and a whole-document quote wrapper from copied YAML snippets.
+  let normalized = String(source).trim().replace(/\\_/g, '_');
+  if ((normalized.startsWith('"') && normalized.endsWith('"')) || (normalized.startsWith("'") && normalized.endsWith("'"))) normalized = normalized.slice(1, -1);
+  const data = load(normalized, { schema: JSON_SCHEMA });
   if (!data || !Array.isArray(data.lines) || !data.lines.length) throw new Error('YAML needs a top-level “lines” list. See the example below.');
   const result = data.lines.map((line, index) => {
-    const rawTime = line?.time ?? line?.timestamp;
-    if (!line || typeof line !== 'object' || !(Number.isFinite(Number(rawTime)) || (typeof rawTime === 'string' && /^\d{1,3}:\d{2}(?:\.\d{1,3})?$/.test(rawTime)))) throw new Error(`YAML line ${index + 1} needs a numeric time in seconds or a MM:SS.hh timestamp.`);
-    const time = stamp(line.time ?? line.timestamp);
+    const rawTime = line?.start_ms != null ? Number(line.start_ms) / 1000 : (line?.time ?? line?.timestamp);
+    const validTime = Number.isFinite(Number(rawTime)) || (typeof rawTime === 'string' && /^\d{1,3}:\d{2}(?:\.\d{1,3})?$/.test(rawTime));
+    if (!line || typeof line !== 'object' || !validTime) throw new Error(`YAML line ${index + 1} needs start_ms (milliseconds), time (seconds), or an MM:SS.hh timestamp.`);
+    const time = stamp(rawTime);
     if (Array.isArray(line.words) && line.words.length) {
       const words = line.words.map((word, wi) => {
-        if (!word || typeof word.text !== 'string' || !word.text.trim() || !Number.isFinite(Number(word.time))) throw new Error(`Word ${wi + 1} on YAML line ${index + 1} needs text and numeric time.`);
-        return `<${stamp(word.time)}>${word.text}`;
-      }).join(' ');
+        const rawWordTime = word?.start_ms != null ? Number(word.start_ms) / 1000 : word?.time;
+        if (!word || typeof word.text !== 'string' || !word.text.trim() || !Number.isFinite(Number(rawWordTime))) throw new Error(`Word ${wi + 1} on YAML line ${index + 1} needs text and start_ms (milliseconds) or time (seconds).`);
+        return `<${stamp(rawWordTime)}>${word.text}`;
+      }).join('');
       return `[${time}]${words}`;
     }
     if (typeof line.text !== 'string' || !line.text.trim()) throw new Error(`YAML line ${index + 1} needs text, or a words list.`);
