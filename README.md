@@ -12,9 +12,9 @@ gradle :android:app:assembleRelease
 
 The output is `android/app/build/outputs/apk/release/app-release.apk`. The release variant is signed with the standard debug certificate for sandbox installation/testing; it is not a Play Store signing key. GitHub Actions also builds and uploads this release APK as the `JaMusic-app-release` artifact.
 
-The Android app provides public-track browsing, native playback controls, and line/word-synced lyrics. Email/password sign-in and account creation use an in-app Material prompt; Google sign-in begins from the same prompt and returns through `jamusic://auth-callback`. Enable Google in Supabase Auth and add that URI to the Supabase redirect allowlist. Track upload and lyrics editing are still available in the web app and have not yet been ported to Android.
+The Android app provides public-track browsing, native playback controls, and line/word-synced lyrics. Email/password sign-in and account creation use an in-app Material prompt; Google sign-in begins from the same prompt and returns through `jamusic://auth-callback`. Google sign-in is enabled for this Supabase project, and the native callback URI is on its redirect allowlist. Track upload and lyrics editing are still available in the web app and have not yet been ported to Android.
 
-For GitHub Actions release builds, provide repository Actions variables or secrets named `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` (the `VITE_`-prefixed names are also accepted). The publishable key is designed for client apps; never put a service-role key in the APK.
+The Android app and `.env.example` include the project's public Supabase URL and publishable key so release builds can query the real database without CI-only secrets. GitHub Actions variables/secrets named `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` (or `VITE_`-prefixed variants) can override these defaults. Publishable keys are designed for client apps; never put a service-role key in the APK.
 
 JaMusic is the original music-sharing website served directly at `/` by Vite. The complete interface—playback, track discovery, artist profiles, uploads, likes, and account flows—lives on the root page; there is no iframe or secondary app URL.
 

@@ -10,8 +10,12 @@ val localProps = Properties().apply {
     val propsFile = rootProject.file("local.properties")
     if (propsFile.exists()) propsFile.inputStream().use { load(it) }
 }
-val supabaseUrl = providers.gradleProperty("SUPABASE_URL").orElse(providers.environmentVariable("SUPABASE_URL")).orElse(localProps.getProperty("SUPABASE_URL", ""))
-val supabaseKey = providers.gradleProperty("SUPABASE_PUBLISHABLE_KEY").orElse(providers.environmentVariable("SUPABASE_PUBLISHABLE_KEY")).orElse(localProps.getProperty("SUPABASE_PUBLISHABLE_KEY", ""))
+val suppliedSupabaseUrl = providers.gradleProperty("SUPABASE_URL").orElse(providers.environmentVariable("SUPABASE_URL")).orElse(localProps.getProperty("SUPABASE_URL", "")).get()
+val suppliedSupabaseKey = providers.gradleProperty("SUPABASE_PUBLISHABLE_KEY").orElse(providers.environmentVariable("SUPABASE_PUBLISHABLE_KEY")).orElse(localProps.getProperty("SUPABASE_PUBLISHABLE_KEY", "")).get()
+// Supabase publishable client settings are public by design; these defaults make app-release work
+// even when CI doesn't pass optional overrides.
+val supabaseUrl = suppliedSupabaseUrl.ifBlank { "https://afbcxhlelghlqzwmjsvz.supabase.co" }
+val supabaseKey = suppliedSupabaseKey.ifBlank { "sb_publishable_5Z20E0_YCZoo3sN88LEABQ_FuCwe0mG" }
 
 android {
     namespace = "com.jamusic.app"
@@ -23,8 +27,8 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
-        buildConfigField("String", "SUPABASE_URL", "\"${supabaseUrl.get()}\"")
-        buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"${supabaseKey.get()}\"")
+        buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
+        buildConfigField("String", "SUPABASE_PUBLISHABLE_KEY", "\"$supabaseKey\"")
     }
 
     buildFeatures { compose = true; buildConfig = true }
