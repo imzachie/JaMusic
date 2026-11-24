@@ -32,6 +32,6 @@ Vite builds the app directly to `dist/index.html`. Google sign-in returns to the
 
 ## Free Whisper auto-generated lyrics
 
-Automatic transcription uses the open `onnx-community/whisper-tiny.en` model via Transformers.js and runs locally in the user's browser. It does not call a paid inference API, need an API key, or send the audio to a transcription service. The model files are fetched from the public Hugging Face model repository and cached by the browser; the first use may take time and uses the visitor's CPU and memory. Transcription is English-focused. Automatic mode is limited to audio files of 25 MB; manual and instrumental modes work without the model download.
+Automatic transcription uses the open `onnx-community/whisper-small.en` model via Transformers.js and runs locally in the user's browser. It does not call a paid inference API, need an API key, or send the audio to a transcription service. Small is larger and generally more accurate than Tiny, but requires a substantial first-time model download and more CPU/memory; the browser caches it afterward. It is English-focused. Speech recognition can still mishear singing, so review auto-generated lyrics; use Manual lyrics typing when exact words matter. Automatic mode is limited to audio files of 25 MB; manual and instrumental modes work without the model download.
 
 Auto-generated and manual lyrics are stored with `[minutes:seconds]` timestamps. In the player, each timestamped line is synchronized to playback and can be clicked to seek to that point.
