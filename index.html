@@ -323,6 +323,11 @@ body.xp-open button,body.xp-open [role=slider]{cursor:pointer !important}
 /* Upload details and lyric modes */
 .upload-warning{margin:0 0 var(--s3);padding:12px 14px;border:1px solid rgba(239,190,113,.3);border-radius:9px;background:rgba(239,190,113,.08);color:#e6d2b5;font-size:13px;line-height:1.5}
 .upload-warning strong{color:#f3dfbf}
+.yt-form{max-width:980px}.yt-url-row{display:flex;align-items:center;gap:12px;margin:8px 0}.yt-url-row input{flex:1;min-width:0}
+.yt-form input[type=url],.yt-form input[type=text],.yt-form input[type=file],.yt-form textarea{width:100%;min-height:46px;padding:10px 14px;border:1px solid var(--hairline);border-radius:9px;background:var(--slate-3);color:var(--offwhite)}
+.yt-form textarea{min-height:100px;margin:8px 0;resize:vertical}.yt-review-grid{display:grid;grid-template-columns:minmax(200px,.7fr) minmax(0,1.3fr);gap:24px;margin-top:24px}
+.yt-thumbnail{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:10px;background:var(--slate-3)}.yt-fields .two{margin-top:12px}.yt-fields input{margin:6px 0 14px}
+.yt-actions{display:flex;justify-content:flex-end;margin-top:16px}.yt-import .field-hint{margin:8px 0}.yt-import #ytNote[data-error="true"]{color:#f3a5a5}
 .lyrics-options{border:0;padding:0;margin:var(--s3) 0 var(--s2);display:grid;gap:8px}
 .lyrics-options legend{font-size:13px;color:var(--grey-3);margin-bottom:8px}
 .lyric-choice{display:flex;align-items:center;gap:11px;padding:11px 13px;border:1px solid var(--hairline);border-radius:9px;background:rgba(31,35,39,.72);cursor:pointer}
@@ -415,8 +420,10 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
     border-right:0;border-top:1px solid var(--hairline);padding-bottom:env(safe-area-inset-bottom)
   }
   .nav .brand,.nav-foot{display:none}
-  .nav ul{flex-direction:row;width:100%;justify-content:space-around}
-  .nav li a{flex-direction:column;gap:2px;padding:8px 12px;font-size:11px;background:none !important}
+  .nav ul{flex-direction:row;width:100%;justify-content:flex-start;overflow-x:auto;scrollbar-width:none}
+  .nav ul::-webkit-scrollbar{display:none}
+  .nav li{flex:1 0 auto}
+  .nav li a{flex-direction:column;gap:2px;padding:8px 8px;font-size:10px;white-space:nowrap;background:none !important}
   .topbar{padding:0 var(--s2)}
   .topbar .brand{display:block}
   .topbar .spacer{display:none}
@@ -443,6 +450,7 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
   .up-top{grid-template-columns:1fr}
   .art-pick{max-width:200px}
   .two{grid-template-columns:1fr}
+  .yt-review-grid{grid-template-columns:1fr}.yt-thumbnail{max-width:480px}.yt-url-row{align-items:stretch;flex-direction:column}.yt-url-row .btn{width:100%}
 }
 .mobile-ctrl{display:none}
 
@@ -478,6 +486,7 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
   <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
   <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L8 18l-4 1 1-4z"/></symbol>
+  <symbol id="i-cloud-up" viewBox="0 0 24 24"><path d="M7 18a4.5 4.5 0 01-.7-8.95A6.5 6.5 0 0118.8 8 5 5 0 0118 18M12 21V11m-4 4l4-4 4 4"/></symbol>
 </svg>
 
 <div class="grain" aria-hidden="true"></div>
@@ -491,7 +500,9 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
   <ul>
     <li><a href="#top" class="active"><svg class="ic"><use href="#i-home"/></svg>Home</a></li>
     <li><a href="#discover"><svg class="ic"><use href="#i-compass"/></svg>Discover</a></li>
+    <li><a href="#ytImport" id="ytNav" hidden><svg class="ic"><use href="#i-cloud-up"/></svg>Upload YT</a></li>
     <li><a href="#artist"><svg class="ic"><use href="#i-mic"/></svg>Artist</a></li>
+    <li><a href="#liked"><svg class="ic"><use href="#i-heart"/></svg>Liked music</a></li>
     <li><a href="#library"><svg class="ic"><use href="#i-library"/></svg>Library</a></li>
   </ul>
   <p class="nav-foot mono">Upload yours.<br>Hear everyone else's.</p>
@@ -551,6 +562,45 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
       </div>
     </section>
 
+    <!-- Owner-only YouTube metadata import. Audio must be uploaded from a rights-cleared source. -->
+    <section class="sec yt-import" id="ytImport" hidden aria-labelledby="ytHeading">
+      <div class="sec-head">
+        <div><h2 class="display" id="ytHeading">Upload YT <span class="serif">to JaMusic</span></h2>
+          <p class="meta">Fetch official video details, review them, then attach audio you have permission to distribute.</p></div>
+      </div>
+      <p class="upload-warning"><strong>Important:</strong> YouTube's API provides video details and artwork, not downloadable audio. JaMusic won't extract audio from YouTube. Upload an audio file you own or are licensed to distribute.</p>
+      <form id="ytImportForm" class="yt-form">
+        <label class="f-label" for="ytUrl">YouTube video URL</label>
+        <div class="yt-url-row"><input id="ytUrl" type="url" required placeholder="https://www.youtube.com/watch?v=..."><button class="btn ghost" id="ytLookup" type="button"><svg class="ic"><use href="#i-search"/></svg>Load details</button></div>
+        <p class="field-hint" id="ytNote" role="status">Paste a public YouTube video link. YouTube Data API key must be configured as a Supabase Edge Function secret.</p>
+        <div id="ytReview" hidden>
+          <div class="yt-review-grid">
+            <div><img id="ytThumbnail" class="yt-thumbnail" alt="YouTube video thumbnail">
+              <label class="f-label" for="ytCoverFile">Cover artwork (optional replacement)</label>
+              <input id="ytCoverFile" type="file" accept="image/jpeg,image/png,image/webp">
+            </div>
+            <div class="yt-fields">
+              <label class="f-label" for="ytTitle">Track title</label><input id="ytTitle" type="text" maxlength="120" required>
+              <div class="two">
+                <div><label class="f-label" for="ytAlbum">Album (optional)</label><input id="ytAlbum" type="text" maxlength="120"></div>
+                <div><label class="f-label" for="ytGenre">Genre (optional)</label><input id="ytGenre" type="text" maxlength="40"></div>
+              </div>
+              <p class="meta" id="ytSource"></p>
+              <label class="f-label" for="ytAudio">Audio file you own / may distribute</label>
+              <input id="ytAudio" type="file" accept="audio/*" required>
+            </div>
+          </div>
+          <fieldset class="lyrics-options"><legend>Lyrics</legend>
+            <label class="lyric-choice"><input type="radio" name="ytLyricMode" value="auto" checked><span><strong>Auto-generate</strong><small>Groq Whisper transcription of your uploaded audio</small></span></label>
+            <label class="lyric-choice"><input type="radio" name="ytLyricMode" value="manual"><span><strong>Type lyrics</strong><small>Enter timestamped or plain lyrics</small></span></label>
+            <label class="lyric-choice"><input type="radio" name="ytLyricMode" value="instrumental"><span><strong>Instrumental</strong><small>Mark this as an instrumental track</small></span></label>
+          </fieldset>
+          <textarea id="ytLyrics" maxlength="8000" placeholder="[01:38.12] Your lyric line" hidden></textarea>
+          <div class="yt-actions"><button class="btn primary" id="ytPublish" type="submit"><svg class="ic"><use href="#i-cloud-up"/></svg>Upload to JaMusic</button></div>
+        </div>
+      </form>
+    </section>
+
     <!-- 2. Discover -->
     <section class="sec" id="discover" hidden>
       <div class="sec-head reveal">
@@ -566,6 +616,17 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
         </div>
         <ul class="tracks" id="allTracks"></ul>
       </div>
+    </section>
+
+    <!-- Liked music, synced with the signed-in account -->
+    <section class="sec" id="liked" aria-labelledby="likedTitle">
+      <div class="sec-head reveal">
+        <h2 class="display" id="likedTitle">Liked <span class="serif">music</span></h2>
+        <p class="meta mono" id="likedCount">0 tracks</p>
+      </div>
+      <ul class="tracks" id="likedTracks"></ul>
+      <p class="empty" id="likedEmpty">Sign in to see your liked music.</p>
+      <button class="btn ghost sm" id="likedSignIn" data-act="signin">Sign in to JaMusic</button>
     </section>
 
     <!-- 4. Artist page preview (the artist of the current track) -->
@@ -846,7 +907,7 @@ const avatar = (p, cls = 's') => p && p.avatar_url
   ? `<img class="av ${cls}" src="${esc(p.avatar_url)}" alt="">`
   : `<span class="av ${cls}" aria-hidden="true">${esc(initial(p))}</span>`;
 
-let toastTimer;
+let toastTimer, ytMetadata = null;
 function toast(msg){ const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 4200); }
 
 /* ---------- Dialogs ---------- */
@@ -952,6 +1013,15 @@ function renderLists(){
     ? 'Nothing matches that search. Try an artist, a title or a genre.'
     : 'No tracks have been uploaded yet.';
   $('#noMatch').hidden = shown.length > 0;
+  renderLikedTracks();
+}
+function renderLikedTracks(){
+  const liked = state.tracks.map((track, index) => [track, index]).filter(([track]) => state.liked.has(track.id));
+  $('#likedTracks').innerHTML = liked.map(([, index]) => rowHTML(index)).join('');
+  $('#likedCount').textContent = `${liked.length} track${liked.length === 1 ? '' : 's'}`;
+  $('#likedEmpty').hidden = liked.length > 0;
+  $('#likedEmpty').textContent = state.user ? (liked.length ? '' : 'No liked music yet. Tap a heart on any track to save it here.') : 'Sign in to see your liked music.';
+  $('#likedSignIn').hidden = !!state.user;
 }
 function renderArtist(){
   const t = cur(); if (!t) return;
@@ -980,6 +1050,7 @@ function renderCta(){
 function renderAuthUI(){
   const u = state.user, p = state.profile;
   $('#uploadBtn').hidden = !u; $('#signinBtn').hidden = !!u; $('#profileBtn').hidden = !u;
+  $('#ytNav').hidden = !u; $('#ytImport').hidden = !u;
   if (u) $('#profileBtn').innerHTML = `${avatar(p, 's')}<span>${esc((p && p.display_name) || 'You')}</span>`;
   $('#footAccount').textContent = u ? 'Your profile' : 'Sign in';
   renderCta();
@@ -1099,13 +1170,15 @@ function renderLikes(){
   const t = cur(), on = !!t && state.liked.has(t.id);
   $$('[data-like-current]').forEach(b => { b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
   $$('[data-like]').forEach(b => { const l = state.liked.has(b.dataset.like); b.classList.toggle('on', l); b.setAttribute('aria-pressed', l); });
+  renderLikedTracks();
 }
 function renderModes(){
   $('#shuffleBtn').classList.toggle('on', state.shuffle);
   $('#shuffleBtn').setAttribute('aria-pressed', state.shuffle);
   $$('[data-shuffle-mirror]').forEach(b => { b.classList.toggle('on', state.shuffle); b.setAttribute('aria-pressed', state.shuffle); });
   const rep = state.repeat !== 'off';
-  [$('#repeatBtn'), ...$$('[data-repeat-mirror]')].forEach(b => { b.classList.toggle('on', rep); b.setAttribute('aria-pressed', rep); b.setAttribute('aria-label', `Repeat: ${state.repeat}`); });
+  const repeatLabel = state.repeat === 'all' ? 'Repeat queue' : state.repeat === 'one' ? 'Repeat once' : 'Repeat off';
+  [$('#repeatBtn'), ...$$('[data-repeat-mirror]')].forEach(b => { b.classList.toggle('on', rep); b.setAttribute('aria-pressed', rep); b.setAttribute('aria-label', repeatLabel); b.title = repeatLabel; });
 }
 
 /* ---------- Transport (real HTMLAudioElement) ---------- */
@@ -1221,7 +1294,7 @@ function initScroll(){
   const navIO = new IntersectionObserver(es => es.forEach(e => {
     if (e.isIntersecting) links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + e.target.id));
   }), { rootMargin:'-45% 0px -50% 0px' });
-  ['top', 'discover', 'artist', 'library'].forEach(id => { const s = document.getElementById(id); if (s) navIO.observe(s); });
+  ['top', 'discover', 'ytImport', 'artist', 'liked', 'library'].forEach(id => { const s = document.getElementById(id); if (s) navIO.observe(s); });
 
   if (reduced) return;
   const para = $$('[data-parallax]');
@@ -1382,6 +1455,98 @@ $('#upCover').addEventListener('change', e => {
 });
 $('#upAudio').addEventListener('change', e => { const f = e.target.files[0]; if (f) $('#audioLabel').firstChild.textContent = f.name.length > 22 ? f.name.slice(0, 20) + '...' : f.name; });
 $('#upCancel').addEventListener('click', () => closeDlg($('#uploadDlg')));
+let ytCoverPreviewUrl = null;
+$('#ytUrl').addEventListener('input', () => { ytMetadata = null; $('#ytReview').hidden = true; $('#ytCoverFile').value = ''; if (ytCoverPreviewUrl) URL.revokeObjectURL(ytCoverPreviewUrl); ytCoverPreviewUrl = null; });
+$('#ytCoverFile').addEventListener('change', () => {
+  const file = $('#ytCoverFile').files[0];
+  if (ytCoverPreviewUrl) URL.revokeObjectURL(ytCoverPreviewUrl);
+  ytCoverPreviewUrl = file ? URL.createObjectURL(file) : null;
+  if (ytCoverPreviewUrl) $('#ytThumbnail').src = ytCoverPreviewUrl;
+  else if (ytMetadata) $('#ytThumbnail').src = ytMetadata.thumbnail_url;
+});
+$$('input[name="ytLyricMode"]').forEach(input => input.addEventListener('change', () => {
+  $('#ytLyrics').hidden = $('input[name="ytLyricMode"]:checked')?.value !== 'manual';
+}));
+$('#ytLookup').addEventListener('click', async () => {
+  const note = $('#ytNote'), button = $('#ytLookup');
+  if (!state.user) return openAuth('signin');
+  if (!sb) return note.textContent = NOT_CONFIGURED;
+  const videoUrl = $('#ytUrl').value.trim();
+  if (!videoUrl) { note.textContent = 'Paste a YouTube video URL first.'; $('#ytUrl').focus(); return; }
+  note.dataset.error = 'false'; note.textContent = 'Fetching official video details…'; button.disabled = true;
+  try {
+    const { data, error } = await sb.functions.invoke('youtube-metadata', { body:{ video_url:videoUrl } });
+    if (error) throw error;
+    ytMetadata = data;
+    $('#ytTitle').value = data.title || '';
+    $('#ytAlbum').value = '';
+    $('#ytGenre').value = '';
+    $('#ytThumbnail').src = data.thumbnail_url;
+    $('#ytThumbnail').alt = `Thumbnail for ${data.title}`;
+    $('#ytSource').textContent = `YouTube video · ${data.channel_title || 'Unknown channel'} · ${fmt(data.duration_seconds || 0)}. Artist credit on JaMusic will be your JaMusic display name.`;
+    $('#ytReview').hidden = false;
+    note.textContent = 'Review and edit the details below, attach your own permitted audio file, then upload. Published details cannot be edited.';
+    $('#ytLyrics').hidden = $('input[name="ytLyricMode"]:checked')?.value !== 'manual';
+  } catch (error) {
+    ytMetadata = null; $('#ytReview').hidden = true;
+    note.dataset.error = 'true'; note.textContent = error.message || 'Could not load YouTube details. Check the link and server API key.';
+  } finally { button.disabled = false; }
+});
+$('#ytImportForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const note = $('#ytNote'), submit = $('#ytPublish');
+  if (!state.user) return openAuth('signin');
+  if (!sb) return note.textContent = NOT_CONFIGURED;
+  if (!ytMetadata) { note.dataset.error = 'true'; note.textContent = 'Load the YouTube details first.'; return; }
+  const audioFile = $('#ytAudio').files[0];
+  if (!audioFile) { note.dataset.error = 'true'; note.textContent = 'Choose a rights-cleared audio file.'; $('#ytAudio').focus(); return; }
+  const lyricMode = $('input[name="ytLyricMode"]:checked')?.value || 'auto';
+  if (lyricMode === 'manual' && !$('#ytLyrics').value.trim()) { note.dataset.error = 'true'; note.textContent = 'Enter lyrics, or choose another lyrics mode.'; $('#ytLyrics').focus(); return; }
+  if (lyricMode === 'auto' && audioFile.size > 25 * 1024 * 1024) { note.dataset.error = 'true'; note.textContent = 'Automatic transcription supports audio up to 25 MB. Choose Manual or Instrumental.'; return; }
+  let audioUpload = null, artwork = null;
+  submit.disabled = true; note.dataset.error = 'false';
+  try {
+    const coverFile = $('#ytCoverFile').files[0];
+    if (coverFile) {
+      note.textContent = 'Uploading your reviewed cover artwork…';
+      artwork = await uploadFile('artwork', coverFile, 'cover');
+    } else {
+      note.textContent = 'Saving the official YouTube artwork…';
+      const { data: coverData, error: coverError } = await sb.functions.invoke('youtube-metadata', { body:{ video_url:ytMetadata.video_url, store_thumbnail:true } });
+      if (coverError) throw coverError;
+      artwork = coverData;
+    }
+    note.textContent = 'Uploading your audio file…';
+    audioUpload = await uploadFile('audio', audioFile, 'track');
+    let lyrics = null;
+    if (lyricMode === 'instrumental') lyrics = 'This song is instrumental';
+    else if (lyricMode === 'manual') lyrics = $('#ytLyrics').value.trim();
+    else {
+      note.textContent = 'Generating lyrics from your uploaded audio…';
+      const { data, error } = await sb.functions.invoke('generate-lyrics', { body:{ audio_path:audioUpload.path } });
+      if (error) throw error;
+      lyrics = data?.lyrics || null;
+    }
+    note.textContent = 'Publishing your reviewed track…';
+    const row = {
+      user_id:state.user.id, title:$('#ytTitle').value.trim(), album:$('#ytAlbum').value.trim() || null,
+      genre:$('#ytGenre').value.trim() || null, lyrics, audio_url:audioUpload.url, audio_path:audioUpload.path,
+      cover_url:artwork.cover_url, cover_path:artwork.cover_path, duration:Number(ytMetadata.duration_seconds) || 0,
+    };
+    const { error } = await sb.from('tracks').insert(row);
+    if (error) throw error;
+    await reloadTracks();
+    $('#ytImportForm').reset(); $('#ytReview').hidden = true; $('#ytLyrics').hidden = true; ytMetadata = null;
+    if (ytCoverPreviewUrl) URL.revokeObjectURL(ytCoverPreviewUrl); ytCoverPreviewUrl = null;
+    note.textContent = 'Published. Track details cannot be edited after upload.';
+    toast('Your track is live on JaMusic.');
+  } catch (error) {
+    if (audioUpload?.path) await sb.storage.from('audio').remove([audioUpload.path]);
+    if (artwork?.cover_path) await sb.storage.from('artwork').remove([artwork.cover_path]);
+    note.dataset.error = 'true'; note.textContent = error.message || 'Upload failed. Please try again.';
+  } finally { submit.disabled = false; }
+});
+
 $('#uploadForm').addEventListener('submit', async e => {
   e.preventDefault();
   const note = $('#upNote'), btn = $('#upSubmit');

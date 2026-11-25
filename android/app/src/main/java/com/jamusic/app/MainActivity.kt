@@ -31,6 +31,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -42,6 +43,9 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -55,6 +59,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -295,7 +301,10 @@ class MainActivity : ComponentActivity() {
             val user = payload.getAsJsonObject("user")
             val userEmail = user?.get("email")?.takeUnless { it.isJsonNull }?.asString ?: email.trim()
             val userId = user?.get("id")?.takeUnless { it.isJsonNull }?.asString.orEmpty()
-            getSharedPreferences("session", MODE_PRIVATE).edit().putString("email", userEmail).putString("user_id", userId).putString("access_token", accessToken).putString("refresh_token", payload.get("refresh_token")?.takeUnless { it.isJsonNull }?.asString).apply()
+            val expiry = System.currentTimeMillis() / 1000 + (payload.get("expires_in")?.takeUnless { it.isJsonNull }?.asLong ?: 3600L)
+            getSharedPreferences("session", MODE_PRIVATE).edit().putString("email", userEmail).putString("user_id", userId)
+                .putString("access_token", accessToken).putString("refresh_token", payload.get("refresh_token")?.takeUnless { it.isJsonNull }?.asString)
+                .putLong("expires_at", expiry).apply()
             signedInAs = userEmail
             signedInUserId = userId
             userEmail
@@ -325,7 +334,36 @@ class MainActivity : ComponentActivity() {
         .header("apikey", BuildConfig.SUPABASE_PUBLISHABLE_KEY)
         .header("Authorization", "Bearer ${savedToken()}")
 
+    private suspend fun refreshSessionIfNeeded() = withContext(Dispatchers.IO) {
+        val prefs = getSharedPreferences("session", MODE_PRIVATE)
+        val access = prefs.getString("access_token", null) ?: return@withContext
+        val claims = runCatching { JSONObject(String(Base64.getUrlDecoder().decode(access.split('.')[1]))) }.getOrNull()
+        val expiresAt = prefs.getLong("expires_at", claims?.optLong("exp", 0L) ?: 0L)
+        if (expiresAt > System.currentTimeMillis() / 1000 + 90) return@withContext
+        val refresh = prefs.getString("refresh_token", null)
+            ?: throw IllegalStateException("Your sign-in expired. Please sign in again.")
+        val payload = JSONObject().put("refresh_token", refresh).toString().toRequestBody(jsonMediaType)
+        val request = Request.Builder().url("${BuildConfig.SUPABASE_URL.trimEnd('/')}/auth/v1/token?grant_type=refresh_token")
+            .header("apikey", BuildConfig.SUPABASE_PUBLISHABLE_KEY).post(payload).build()
+        httpClient.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException("Your sign-in expired. Please sign in again. (${response.code})")
+            val result = JsonParser.parseString(body).asJsonObject
+            val nextAccess = result.get("access_token")?.takeUnless { it.isJsonNull }?.asString
+                ?: throw IllegalStateException("Session refresh returned no access token. Please sign in again.")
+            val nextRefresh = result.get("refresh_token")?.takeUnless { it.isJsonNull }?.asString ?: refresh
+            val expiry = System.currentTimeMillis() / 1000 + (result.get("expires_in")?.asLong ?: 3600L)
+            val user = result.getAsJsonObject("user")
+            val id = user?.get("id")?.takeUnless { it.isJsonNull }?.asString ?: signedInUserId
+            val email = user?.get("email")?.takeUnless { it.isJsonNull }?.asString ?: signedInAs
+            prefs.edit().putString("access_token", nextAccess).putString("refresh_token", nextRefresh)
+                .putLong("expires_at", expiry).putString("user_id", id).putString("email", email).apply()
+            withContext(Dispatchers.Main) { signedInUserId = id; signedInAs = email }
+        }
+    }
+
     private suspend fun loadOrCreateProfile(userId: String): Profile = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
         val base = BuildConfig.SUPABASE_URL.trimEnd('/')
         val get = authedRequest("$base/rest/v1/profiles?select=*&id=eq.$userId").get().build()
         val found = httpClient.newCall(get).execute().use { response ->
@@ -375,6 +413,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun updateProfile(profile: Profile, avatarUri: Uri?, bannerUri: Uri?): Profile = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
         var avatar = profile.avatarUrl
         var banner = profile.bannerUrl
         if (avatarUri != null) avatar = uploadObject(avatarUri, "profiles", profile.id, 5 * 1024 * 1024).second
@@ -392,6 +431,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun saveTrackLyrics(trackId: String, lyrics: String) = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
         val payload = JSONObject().put("lyrics", lyrics.ifBlank { JSONObject.NULL })
         val request = authedRequest("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/tracks?id=eq.$trackId")
             .patch(payload.toString().toRequestBody(jsonMediaType)).header("Prefer", "return=minimal").build()
@@ -402,6 +442,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun uploadTrack(title: String, album: String, genre: String, lyricMode: String, lyricText: String, audioUri: Uri?, coverUri: Uri?): String = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
         val userId = signedInUserId ?: throw IllegalStateException("Sign in before uploading.")
         val audio = audioUri ?: throw IllegalArgumentException("Choose an audio file.")
         val cover = coverUri ?: throw IllegalArgumentException("Choose cover artwork.")
@@ -464,7 +505,10 @@ class MainActivity : ComponentActivity() {
             val claims = runCatching { JSONObject(String(Base64.getUrlDecoder().decode(accessToken.split('.')[1]))) }.getOrNull()
             val email = params["user_email"] ?: claims?.optString("email")?.takeIf { it.isNotBlank() } ?: "Google account"
             val userId = claims?.optString("sub").orEmpty()
-            getSharedPreferences("session", MODE_PRIVATE).edit().putString("access_token", accessToken).putString("user_id", userId).putString("email", email).apply()
+            val refreshToken = params["refresh_token"] ?: uri.getQueryParameter("refresh_token")
+            val expiresIn = (params["expires_in"] ?: uri.getQueryParameter("expires_in"))?.toLongOrNull() ?: 3600L
+            getSharedPreferences("session", MODE_PRIVATE).edit().putString("access_token", accessToken).putString("user_id", userId).putString("email", email)
+                .putString("refresh_token", refreshToken).putLong("expires_at", System.currentTimeMillis() / 1000 + expiresIn).apply()
             signedInAs = email
             signedInUserId = userId
             authNotice = "Signed in with Google."
@@ -629,6 +673,8 @@ private fun JaMusicApp(
     var activeTrack by remember { mutableStateOf<Track?>(null) }
     var playerOpen by remember { mutableStateOf(false) }
     var playing by remember { mutableStateOf(false) }
+    var shuffleEnabled by remember { mutableStateOf(false) }
+    var repeatMode by remember { mutableIntStateOf(Player.REPEAT_MODE_OFF) }
     var currentMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
     var tab by remember { mutableIntStateOf(0) }
@@ -672,6 +718,10 @@ private fun JaMusicApp(
         }
     }
     LaunchedEffect(activeTrack, playing) { onNowPlayingChanged(activeTrack, playing) }
+    LaunchedEffect(shuffleEnabled, repeatMode) {
+        player.shuffleModeEnabled = shuffleEnabled
+        player.repeatMode = repeatMode
+    }
     DisposableEffect(player, tracks) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying }
@@ -808,8 +858,19 @@ private fun JaMusicApp(
             onFavorite = { favorites = if (track.id in favorites) favorites - track.id else favorites + track.id },
             onDismiss = { playerOpen = false }, onToggle = { if (playing) player.pause() else player.play() },
             onSeek = { player.seekTo(it) },
-            onPrev = { playRelative(tracks, track, -1, player) { activeTrack = it } },
-            onNext = { playRelative(tracks, track, 1, player) { activeTrack = it } },
+            onPrev = {
+                if (player.currentPosition > 3_000L) player.seekTo(0)
+                else if (player.hasPreviousMediaItem()) player.seekToPreviousMediaItem()
+                else playRelative(tracks, track, -1, player) { activeTrack = it }
+            },
+            onNext = {
+                if (player.hasNextMediaItem()) player.seekToNextMediaItem()
+                else playRelative(tracks, track, 1, player) { activeTrack = it }
+            },
+            shuffleEnabled = shuffleEnabled,
+            repeatMode = repeatMode,
+            onToggleShuffle = { shuffleEnabled = !shuffleEnabled },
+            onCycleRepeat = { repeatMode = when (repeatMode) { Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL; Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_OFF } },
             canEditLyrics = signedInUserId != null && signedInUserId == track.ownerId,
             onEditLyrics = { lyricsEditing = true; lyricsError = null }
         )
@@ -1097,7 +1158,7 @@ private fun TrackRow(track: Track, index: Int, isFavorite: Boolean, onFavorite: 
 private fun Cover(track: Track, modifier: Modifier = Modifier, seed: Int = 0) {
     val gradients = listOf(listOf(Color(0xFF8070C1), Color(0xFF3C315B)), listOf(Color(0xFFC47779), Color(0xFF49303D)), listOf(Color(0xFF71978A), Color(0xFF253B39)))
     Box(modifier.clip(RoundedCornerShape(19.dp)).background(Brush.linearGradient(gradients[seed % gradients.size])), contentAlignment = Alignment.Center) {
-        if (track.cover.isNotBlank()) AsyncImage(track.cover, contentDescription = "${track.title} cover", modifier = Modifier.fillMaxSize())
+        if (track.cover.isNotBlank()) AsyncImage(track.cover, contentDescription = "${track.title} cover", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         else Text(track.title.take(1).uppercase(), color = Cloud.copy(alpha = .78f), fontSize = 26.sp, fontWeight = FontWeight.Bold)
     }
 }
@@ -1113,14 +1174,19 @@ private fun MiniPlayer(track: Track, playing: Boolean, onToggle: () -> Unit, onO
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PlayerSheet(track: Track, player: ExoPlayer, playing: Boolean, currentMs: Long, durationMs: Long, isFavorite: Boolean, onFavorite: () -> Unit, onDismiss: () -> Unit, onToggle: () -> Unit, onSeek: (Long) -> Unit, onPrev: () -> Unit, onNext: () -> Unit, canEditLyrics: Boolean, onEditLyrics: () -> Unit) {
+private fun PlayerSheet(track: Track, player: ExoPlayer, playing: Boolean, currentMs: Long, durationMs: Long, isFavorite: Boolean, onFavorite: () -> Unit, onDismiss: () -> Unit, onToggle: () -> Unit, onSeek: (Long) -> Unit, onPrev: () -> Unit, onNext: () -> Unit, shuffleEnabled: Boolean, repeatMode: Int, onToggleShuffle: () -> Unit, onCycleRepeat: () -> Unit, canEditLyrics: Boolean, onEditLyrics: () -> Unit) {
     val lines = remember(track.lyrics) { parseLyrics(track.lyrics) }
     val currentSeconds = currentMs / 1000.0
     val currentLine = if (lines.any { it.timed }) lines.indexOfLast { it.timed && it.at <= currentSeconds } else -1
+    val lyricsListState = rememberLazyListState()
+    LaunchedEffect(currentLine, lines.size) {
+        if (currentLine >= 0 && currentLine < lines.size) lyricsListState.animateScrollToItem(currentLine)
+    }
+    val coverSize = minOf(280.dp, LocalConfiguration.current.screenHeightDp.dp * .29f)
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Ink, contentColor = Cloud, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), dragHandle = { BottomSheetDefaults.DragHandle(color = Muted) }) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.92f).padding(horizontal = 24.dp)) {
-            Cover(track, Modifier.fillMaxWidth().aspectRatio(1f), track.title.length)
-            Spacer(Modifier.height(18.dp))
+            Cover(track, Modifier.size(coverSize).align(Alignment.CenterHorizontally), track.title.length)
+            Spacer(Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) { Text(track.title, style = MaterialTheme.typography.headlineSmall, color = Cloud, fontWeight = FontWeight.SemiBold); Text(track.artist, color = Muted) }
                 IconButton(onClick = onFavorite) { Icon(if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = "Like this track", tint = if (isFavorite) Violet else Muted) }
@@ -1132,12 +1198,22 @@ private fun PlayerSheet(track: Track, player: ExoPlayer, playing: Boolean, curre
                 FilledIconButton(onClick = onToggle, modifier = Modifier.size(68.dp), shape = CircleShape, colors = IconButtonDefaults.filledIconButtonColors(containerColor = Lime, contentColor = Ink)) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, null, modifier = Modifier.size(34.dp)) }
                 IconButton(onClick = onNext, modifier = Modifier.size(52.dp)) { Icon(Icons.Default.SkipNext, null, tint = Cloud, modifier = Modifier.size(31.dp)) }
             }
-            Row(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 6.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onToggleShuffle) {
+                    Icon(Icons.Default.Shuffle, contentDescription = null, tint = if (shuffleEnabled) Lime else Muted)
+                    Spacer(Modifier.width(6.dp)); Text("Shuffle", color = if (shuffleEnabled) Lime else Muted)
+                }
+                TextButton(onClick = onCycleRepeat) {
+                    Icon(if (repeatMode == Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat, contentDescription = null, tint = if (repeatMode == Player.REPEAT_MODE_OFF) Muted else Lime)
+                    Spacer(Modifier.width(6.dp)); Text(when (repeatMode) { Player.REPEAT_MODE_ALL -> "Repeat queue"; Player.REPEAT_MODE_ONE -> "Repeat once"; else -> "Repeat off" }, color = if (repeatMode == Player.REPEAT_MODE_OFF) Muted else Lime)
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("LYRICS", Modifier.weight(1f), color = Violet, style = MaterialTheme.typography.labelLarge, letterSpacing = 2.sp, fontWeight = FontWeight.Bold)
                 if (canEditLyrics) TextButton(onClick = onEditLyrics) { Text("Edit lyrics") }
             }
             if (lines.isEmpty()) Text("No lyrics yet", color = Muted, style = MaterialTheme.typography.headlineSmall)
-            else LazyColumn(contentPadding = PaddingValues(bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
+            else LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = lyricsListState, contentPadding = PaddingValues(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
                 itemsIndexed(lines) { index, line ->
                     val isCurrent = index == currentLine
                     val lineColor by animateColorAsState(if (isCurrent) Cloud else Muted.copy(alpha = if (index < currentLine) .43f else .58f), animationSpec = spring(stiffness = Spring.StiffnessLow), label = "line-color")
