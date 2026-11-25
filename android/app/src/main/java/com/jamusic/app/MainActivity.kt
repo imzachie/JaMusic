@@ -1263,7 +1263,7 @@ private fun JaMusicApp(
                             jamlineState.members.forEach { member ->
                                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     if (member.avatarUrl.isNotBlank()) AsyncImage(model = member.avatarUrl, contentDescription = "${member.displayName} avatar", modifier = Modifier.size(36.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-                                    else Box(Modifier.size(36.dp).clip(CircleShape).background(Surface), contentAlignment = Alignment.Center) { Text(member.displayName.take(1).uppercase(), color = Violet) }
+                                    else Box(Modifier.size(36.dp).clip(CircleShape).background(Panel), contentAlignment = Alignment.Center) { Text(member.displayName.take(1).uppercase(), color = Violet) }
                                     Column(Modifier.weight(1f)) { Text(member.displayName, color = Cloud); Text("@${member.username} · ${member.role}", color = Muted, style = MaterialTheme.typography.bodySmall) }
                                     if (jamlineState.role == "host" && member.role != "host") TextButton(onClick = { scope.launch {
                                         runCatching { kickJamlineMember(jamlineState.roomId.orEmpty(), member.userId); jamlineState = loadJamline(signedInUserId.orEmpty()) }
