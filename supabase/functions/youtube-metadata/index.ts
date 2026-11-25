@@ -38,6 +38,11 @@ Deno.serve(async request => {
   const auth = createClient(url, anon, { global: { headers: { Authorization: authorization } } });
   const { data: { user }, error: authError } = await auth.auth.getUser();
   if (authError || !user) return json({ error: 'Your session expired. Sign in again.' }, 401);
+  const { data: profile, error: profileError } = await auth.from('profiles').select('username').eq('id', user.id).maybeSingle();
+  if (profileError) return json({ error: 'Could not verify the JaMusic owner profile.' }, 503);
+  const isOwner = user.email?.trim().toLowerCase() === 'aidilzafri2013@gmail.com' &&
+    profile?.username?.trim().replace(/^@/, '').toLowerCase() === 'imzachie';
+  if (!isOwner) return json({ error: 'YouTube import is restricted to the JaMusic owner account.' }, 403);
   let body: { video_url?: string; store_thumbnail?: boolean };
   try { body = await request.json(); } catch { return json({ error: 'Send a YouTube URL.' }, 400); }
   const id = typeof body.video_url === 'string' ? parseVideoId(body.video_url) : null;
