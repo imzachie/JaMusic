@@ -1113,13 +1113,30 @@ async function createJamline(){
  startJamlinePolling(); toast('Jamline created. Invite artists to join.');
 }
 async function sendJamlineInvite(){
- const username=$('#jamlineInviteUsername').value.trim().replace(/^@/,'').toLowerCase();
- if(!username)return;
- const {data:person,error}=await sb.from('profiles').select('id').eq('username',username).maybeSingle();
- if(error||!person){$('#jamlineNotice').textContent='Artist not found. Check their JaMusic username.';return;}
- const {error:inviteError}=await sb.from('jamline_invites').insert({jamline_id:state.jamline.id,inviter_id:state.user.id,invitee_id:person.id});
- if(inviteError){$('#jamlineNotice').textContent=inviteError.message;return;}
- $('#jamlineInviteUsername').value='';$('#jamlineNotice').textContent='Invitation sent. They need to accept before joining.';
+ const username=$('#jamlineInviteUsername').value.trim().replace(/^@/,'');
+ if(!username||!state.jamline)return;
+ $('#jamlineInviteBtn').disabled=true;
+ try{
+  const {error}=await sb.rpc('invite_to_jamline',{p_room_id:state.jamline.id,p_username:username});
+  if(error)throw error;
+  $('#jamlineInviteUsername').value='';$('#jamlineNotice').textContent='Invitation sent. They need to accept before joining.';
+ }catch(error){$('#jamlineNotice').textContent=`Invitation failed: ${error.message||error}`;}
+ finally{$('#jamlineInviteBtn').disabled=false;}
+}
+async function refreshJamlineInvites(){
+ if(!sb||!state.user){$('#jamlineInvites').hidden=true;return;}
+ try{
+  const {data:invites,error}=await sb.from('jamline_invites').select('id,jamline_id,inviter_id,created_at').eq('invitee_id',state.user.id).eq('status','pending').order('created_at',{ascending:false});
+  if(error)throw error;
+  const items=await Promise.all((invites||[]).map(async inv=>{
+   const [{data:room},{data:inviter}]=await Promise.all([
+    sb.from('jamlines').select('id,name').eq('id',inv.jamline_id).maybeSingle(),
+    sb.from('profiles').select('display_name,username').eq('id',inv.inviter_id).maybeSingle()
+   ]);return {...inv,room,inviter};
+  }));
+  $('#jamlineInviteList').innerHTML=items.map(inv=>`<p class="row">${esc(inv.inviter?.display_name||inv.inviter?.username||'An artist')} invited you to <b>${esc(inv.room?.name||'a Jamline')}</b> <button class="btn primary sm" data-jam-accept="${esc(inv.id)}" data-line="${esc(inv.jamline_id)}">Accept</button> <button class="btn ghost sm" data-jam-decline="${esc(inv.id)}">Decline</button></p>`).join('')||'<p>No pending invitations.</p>';
+  $('#jamlineInvites').hidden=false;
+ }catch(error){$('#jamlineNotice').textContent=`Invitations could not load: ${error.message||error}`;}
 }
 async function respondJamlineInvite(id,lineId,accept){
  const {error}=await sb.from('jamline_invites').update({status:accept?'accepted':'declined'}).eq('id',id);
@@ -1180,7 +1197,7 @@ async function pollJamline(){
  }finally{jamlinePollBusy=false;}
 }
 function startJamlinePolling(){if(jamlinePollTimer)clearInterval(jamlinePollTimer);if(!state.jamline)return;pollJamline();jamlinePollTimer=setInterval(pollJamline,1300);}
-setInterval(()=>{if(state.user&&!state.jamline)refreshJamline();},5000);
+setInterval(()=>{if(state.user){refreshJamlineInvites();if(!state.jamline)refreshJamline();}},5000);
 function jamlineGate(){if(state.jamline&&!['host','cohost'].includes(state.jamlineRole)){toast('Only the host and elected co-host can pick or control songs.');return false;}return true;}
 $('#jamlineCreateBtn').addEventListener('click',createJamline);
 $('#jamlineInviteBtn').addEventListener('click',sendJamlineInvite);
