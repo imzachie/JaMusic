@@ -518,6 +518,7 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
     <li><a href="#artist"><svg class="ic"><use href="#i-mic"/></svg>Artist</a></li>
     <li><a href="#liked"><svg class="ic"><use href="#i-heart"/></svg>Liked music</a></li>
     <li><a href="#library"><svg class="ic"><use href="#i-library"/></svg>Library</a></li>
+    <li><a href="#jamline"><svg class="ic"><use href="#i-mic"/></svg>Jamline</a></li>
     <li><a href="#you" id="youNav"><svg class="ic"><use href="#i-mic"/></svg>You</a></li>
   </ul>
   <p class="nav-foot mono">Upload yours.<br>Hear everyone else's.</p>
@@ -694,6 +695,24 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
       </div>
     </section>
 
+    <section class="artist" id="jamline" aria-labelledby="jamlineTitle">
+      <h2 id="jamlineTitle">Jamline</h2>
+      <p class="bio">Listen together in sync. The host and one elected co-host control song selection and playback.</p>
+      <div id="jamlineSignedOut"><button class="btn primary sm" data-act="signin">Sign in to use Jamline</button></div>
+      <div id="jamlineCreate" hidden><label>New Jamline name <input id="jamlineName" maxlength="60" placeholder="Friday night listening"></label><button class="btn primary sm" id="jamlineCreateBtn">Create Jamline</button></div>
+      <div id="jamlineInvites" hidden><h3>Invitations</h3><div id="jamlineInviteList"></div></div>
+      <div id="jamlineRoom" hidden>
+        <p id="jamlineRoomStatus"></p>
+        <div id="jamlineControls" class="acts" hidden>
+          <label>Invite artist by username <input id="jamlineInviteUsername" placeholder="artist_username"></label><button class="btn ghost sm" id="jamlineInviteBtn">Invite</button>
+        </div>
+        <div id="jamlineCohostControl" hidden><label>Co-host <select id="jamlineCohost"><option value="">Choose a co-host</option></select></label></div>
+        <h3>Listeners</h3><ul id="jamlineMembers" class="tracks"></ul>
+        <div id="jamlineSongControl" hidden><label>Host / co-host song selection <select id="jamlineSong"><option value="">Choose a song</option></select></label></div>
+        <p id="jamlineNowPlaying"></p>
+      </div>
+      <p id="jamlineNotice" role="status"></p>
+    </section>
     <section class="artist" id="you" aria-labelledby="youName">
       <div class="bgbox" id="youBanner" hidden><div class="bgl a on"></div></div>
       <div class="a-id" id="youAvatar"></div><h2 id="youName">Your profile</h2>
@@ -951,7 +970,129 @@ const NOT_CONFIGURED = 'Supabase is not connected yet. Add your project URL and 
 
 /* ---------- State (nothing is hardcoded: tracks come from the database) ---------- */
 const state = { tracks:[], i:0, playing:false, vol:.7, muted:false, shuffle:false, repeat:'off',
-                liked:new Set(), user:null, profile:null, query:'', artistId:null, viewedArtist:null };
+                liked:new Set(), user:null, profile:null, query:'', artistId:null, viewedArtist:null, jamline:null, jamlineRole:null, jamlineSyncing:false, jamlineLastWrite:0 };
+let jamlinePollTimer=null, jamlinePollBusy=false;
+function renderJamlineBase(){
+  const signed=!!state.user;
+  $('#jamlineSignedOut').hidden=signed; $('#jamlineCreate').hidden=!signed||!!state.jamline;
+  $('#jamlineRoom').hidden=!state.jamline; $('#jamlineInvites').hidden=!signed;
+  const room=state.jamline; if(!room)return;
+  const controller=['host','cohost'].includes(state.jamlineRole);
+  $('#jamlineRoomStatus').textContent=`${room.name} · ${state.jamlineRole||'member'} · room code ${room.id}`;
+  $('#jamlineControls').hidden=state.jamlineRole!=='host';
+  $('#jamlineCohostControl').hidden=state.jamlineRole!=='host';
+  $('#jamlineSongControl').hidden=!controller;
+  const songSelect=$('#jamlineSong'), keep=songSelect.value;
+  songSelect.innerHTML='<option value="">Choose a song</option>'+state.tracks.map(t=>`<option value="${esc(t.id)}">${esc(t.title)} — ${esc(artistName(t))}</option>`).join('');
+  if(state.tracks.some(t=>t.id===keep))songSelect.value=keep;
+}
+async function refreshJamline(){
+ if(!sb||!state.user){state.jamline=null;state.jamlineRole=null;renderJamlineBase();return;}
+ try{
+  const [{data:members,error:memberErr},{data:invites,error:inviteErr}]=await Promise.all([
+   sb.from('jamline_members').select('jamline_id,role,joined_at').eq('user_id',state.user.id).order('joined_at',{ascending:false}),
+   sb.from('jamline_invites').select('id,jamline_id,inviter_id,created_at').eq('invitee_id',state.user.id).eq('status','pending').order('created_at',{ascending:false})
+  ]);
+  if(memberErr||inviteErr)throw memberErr||inviteErr;
+  const inviteRooms=await Promise.all((invites||[]).map(async inv=>{
+    const {data:room}=await sb.from('jamlines').select('id,name').eq('id',inv.jamline_id).maybeSingle();
+    const {data:inviter}=await sb.from('profiles').select('display_name,username').eq('id',inv.inviter_id).maybeSingle();
+    return {...inv,room,inviter};
+  }));
+  $('#jamlineInviteList').innerHTML=inviteRooms.map(inv=>`<p class="row">${esc(inv.inviter?.display_name||inv.inviter?.username||'An artist')} invited you to <b>${esc(inv.room?.name||'a Jamline')}</b> <button class="btn primary sm" data-jam-accept="${esc(inv.id)}" data-line="${esc(inv.jamline_id)}">Accept</button> <button class="btn ghost sm" data-jam-decline="${esc(inv.id)}">Decline</button></p>`).join('')||'<p>No pending invitations.</p>';
+  $('#jamlineInvites').hidden=false;
+  const membership=members?.[0];
+  if(!membership){state.jamline=null;state.jamlineRole=null;renderJamlineBase();return;}
+  const {data:room,error:roomErr}=await sb.from('jamlines').select('*').eq('id',membership.jamline_id).maybeSingle();
+  if(roomErr||!room)throw roomErr||new Error('Could not load Jamline room.');
+  state.jamline=room;state.jamlineRole=membership.role;
+  const {data:roster,error:rosterErr}=await sb.from('jamline_members').select('user_id,role,joined_at').eq('jamline_id',room.id).order('joined_at');
+  if(rosterErr)throw rosterErr;
+  const ids=(roster||[]).map(m=>m.user_id);
+  const {data:profiles}=ids.length?await sb.from('profiles').select('id,username,display_name').in('id',ids):{data:[]};
+  const byId=Object.fromEntries((profiles||[]).map(p=>[p.id,p]));
+  $('#jamlineMembers').innerHTML=(roster||[]).map(m=>`<li class="row"><span class="r-title"><b>${esc(byId[m.user_id]?.display_name||byId[m.user_id]?.username||'Artist')}</b><em>${esc(m.role)}</em></span>${state.jamlineRole==='host'&&m.role!=='host'?`<button class="btn ghost sm" data-jam-cohost="${esc(m.user_id)}">${m.role==='cohost'?'Remove co-host':'Make co-host'}</button>`:''}</li>`).join('');
+  const co=$('#jamlineCohost');co.innerHTML='<option value="">Choose a co-host</option>'+(roster||[]).filter(m=>m.role!=='host').map(m=>`<option value="${esc(m.user_id)}" ${m.role==='cohost'?'selected':''}>${esc(byId[m.user_id]?.display_name||byId[m.user_id]?.username||'Artist')}</option>`).join('');
+  const current=state.tracks.find(t=>t.id===room.current_track_id);
+  $('#jamlineNowPlaying').textContent=current?`Now playing: ${current.title} — ${artistName(current)}`:'Host has not picked a song yet.';
+  renderJamlineBase();
+ }catch(e){$('#jamlineNotice').textContent=`Jamline could not load: ${e.message||e}`;}
+}
+async function createJamline(){
+ if(!state.user)return openAuth();
+ const name=$('#jamlineName').value.trim()||'Jamline';
+ const {data,error}=await sb.from('jamlines').insert({name,host_id:state.user.id}).select('*').single();
+ if(error){$('#jamlineNotice').textContent=error.message;return;}
+ await refreshJamline(); startJamlinePolling(); toast('Jamline created. Invite artists to join.');
+}
+async function sendJamlineInvite(){
+ const username=$('#jamlineInviteUsername').value.trim().replace(/^@/,'').toLowerCase();
+ if(!username)return;
+ const {data:person,error}=await sb.from('profiles').select('id').eq('username',username).maybeSingle();
+ if(error||!person){$('#jamlineNotice').textContent='Artist not found. Check their JaMusic username.';return;}
+ const {error:inviteError}=await sb.from('jamline_invites').insert({jamline_id:state.jamline.id,inviter_id:state.user.id,invitee_id:person.id});
+ if(inviteError){$('#jamlineNotice').textContent=inviteError.message;return;}
+ $('#jamlineInviteUsername').value='';$('#jamlineNotice').textContent='Invitation sent. They need to accept before joining.';
+}
+async function respondJamlineInvite(id,lineId,accept){
+ const {error}=await sb.from('jamline_invites').update({status:accept?'accepted':'declined'}).eq('id',id);
+ if(error){$('#jamlineNotice').textContent=error.message;return;}
+ if(accept){const {error:joinError}=await sb.from('jamline_members').insert({jamline_id:lineId,user_id:state.user.id,role:'member'});if(joinError){$('#jamlineNotice').textContent=joinError.message;return;}}
+ await refreshJamline();if(accept)startJamlinePolling();
+}
+async function electJamlineCohost(id){
+ const room=state.jamline;if(!room||state.jamlineRole!=='host')return;
+ const {data:roster}=await sb.from('jamline_members').select('user_id,role').eq('jamline_id',room.id);
+ for(const m of roster||[])if(m.role==='cohost'&&m.user_id!==id){const r=await sb.from('jamline_members').update({role:'member'}).eq('jamline_id',room.id).eq('user_id',m.user_id);if(r.error){$('#jamlineNotice').textContent=r.error.message;return;}}
+ if(id){const r=await sb.from('jamline_members').update({role:'cohost'}).eq('jamline_id',room.id).eq('user_id',id);if(r.error){$('#jamlineNotice').textContent=r.error.message;return;}}
+ await refreshJamline();
+}
+async function setJamlineSong(id){
+ if(!state.jamline||!['host','cohost'].includes(state.jamlineRole))return;
+ const track=state.tracks.find(t=>t.id===id);if(!track)return;
+ const {error}=await sb.from('jamlines').update({current_track_id:id,position_ms:0,is_playing:true}).eq('id',state.jamline.id);
+ if(error){$('#jamlineNotice').textContent=error.message;return;}
+ jamlineApply={trackId:id,position:0,playing:true};select(state.tracks.indexOf(track),true);await refreshJamline();
+}
+let jamlineApply=null;
+async function syncJamlineSnapshot(room){
+ if(!room?.current_track_id)return;
+ const current=cur();
+ if(current?.id!==room.current_track_id){const i=state.tracks.findIndex(t=>t.id===room.current_track_id);if(i<0)return;jamlineApply={trackId:room.current_track_id,position:Number(room.position_ms)||0,playing:room.is_playing};state.jamlineSyncing=true;select(i,false);if(audio.readyState>=1)audio.currentTime=(Number(room.position_ms)||0)/1000;else audio.addEventListener('loadedmetadata',()=>{audio.currentTime=(Number(room.position_ms)||0)/1000;},{once:true});state.jamlineSyncing=false;}
+ const shouldLead=['host','cohost'].includes(state.jamlineRole);
+ if(shouldLead){
+  if(Date.now()-state.jamlineLastWrite>2200){state.jamlineLastWrite=Date.now();sb.from('jamlines').update({position_ms:Math.floor((audio.currentTime||0)*1000),is_playing:!audio.paused}).eq('id',room.id).then(({error})=>{if(error)console.warn('Jamline sync write failed',error.message);});}
+  return;
+ }
+ const target=(Number(room.position_ms)||0)/1000;
+ if(Math.abs((audio.currentTime||0)-target)>2.2){if(audio.readyState>=1)audio.currentTime=target;else audio.addEventListener('loadedmetadata',()=>{audio.currentTime=target;},{once:true});}
+ if(room.is_playing&&audio.paused)audio.play().catch(()=>toast('Tap play once to allow synchronized audio.'));
+ if(!room.is_playing&&!audio.paused)audio.pause();
+}
+async function pollJamline(){
+ if(jamlinePollBusy||!state.jamline||!sb)return;jamlinePollBusy=true;
+ try{
+  const roomId=state.jamline.id;
+  const [{data,error},{data:membership}]=await Promise.all([
+   sb.from('jamlines').select('*').eq('id',roomId).maybeSingle(),
+   sb.from('jamline_members').select('role').eq('jamline_id',roomId).eq('user_id',state.user.id).maybeSingle()
+  ]);
+  if(!error&&data){state.jamline=data;if(membership?.role&&membership.role!==state.jamlineRole){state.jamlineRole=membership.role;renderJamlineBase();}await syncJamlineSnapshot(data);}
+ }finally{jamlinePollBusy=false;}
+}
+function startJamlinePolling(){if(jamlinePollTimer)clearInterval(jamlinePollTimer);if(!state.jamline)return;pollJamline();jamlinePollTimer=setInterval(pollJamline,1300);}
+setInterval(()=>{if(state.user&&!state.jamline)refreshJamline();},5000);
+function jamlineGate(){if(state.jamline&&!['host','cohost'].includes(state.jamlineRole)){toast('Only the host and elected co-host can pick or control songs.');return false;}return true;}
+$('#jamlineCreateBtn').addEventListener('click',createJamline);
+$('#jamlineInviteBtn').addEventListener('click',sendJamlineInvite);
+$('#jamlineSong').addEventListener('change',e=>{if(e.target.value)setJamlineSong(e.target.value);});
+$('#jamlineCohost').addEventListener('change',e=>electJamlineCohost(e.target.value));
+document.addEventListener('click',e=>{
+ const accept=e.target.closest('[data-jam-accept]');if(accept){respondJamlineInvite(accept.dataset.jamAccept,accept.dataset.line,true);return;}
+ const decline=e.target.closest('[data-jam-decline]');if(decline){respondJamlineInvite(decline.dataset.jamDecline,null,false);return;}
+ const co=e.target.closest('[data-jam-cohost]');if(co){electJamlineCohost(co.dataset.jamCohost);return;}
+});
+
 const audio = new Audio(); audio.preload = 'metadata'; audio.volume = state.vol;
 const cur = () => state.tracks[state.i] || null;
 const dur = () => (isFinite(audio.duration) && audio.duration > 0) ? audio.duration : (cur() ? cur().duration : 0);
@@ -1111,7 +1252,7 @@ function isYoutubeOwner(){
 }
 function renderAuthUI(){
   const u = state.user, p = state.profile;
-  renderYou();
+  renderYou(); renderJamlineBase();
   $('#uploadBtn').hidden = !u; $('#signinBtn').hidden = !!u; $('#profileBtn').hidden = !u;
   const canUseYoutubeImport = isYoutubeOwner() && window.matchMedia('(min-width: 901px)').matches;
   $('#ytNav').hidden = !canUseYoutubeImport; $('#ytImport').hidden = !canUseYoutubeImport;
@@ -1278,22 +1419,25 @@ function renderModes(){
 /* ---------- Transport (real HTMLAudioElement) ---------- */
 function setPlaying(p){ state.playing = p; renderPlayState(); }
 function ensureSrc(){ const t = cur(); if (t && audio.getAttribute('src') !== t.audio_url) audio.src = t.audio_url; }
-function play(){ ensureSrc(); const p = audio.play(); if (p && p.catch) p.catch(() => setPlaying(false)); }
-function toggle(){ if (!cur()) return; if (audio.paused) play(); else audio.pause(); }
+function play(){ if(state.jamline&&!state.jamlineSyncing&&!jamlineGate())return; ensureSrc(); const p = audio.play(); if (p && p.catch) p.catch(() => setPlaying(false)); }
+function toggle(){ if (!cur() || !jamlineGate()) return; if (audio.paused) play(); else audio.pause(); }
 function select(i, autoplay = true){
   if (!state.tracks.length) return;
+  if(state.jamline&&!state.jamlineSyncing&&!jamlineGate())return;
   state.i = (i + state.tracks.length) % state.tracks.length;
   audio.src = cur().audio_url;
+  if(state.jamline&&!state.jamlineSyncing&&sb){const payload={current_track_id:cur().id,position_ms:0,is_playing:!!autoplay};sb.from('jamlines').update(payload).eq('id',state.jamline.id).then(({error})=>{if(error)toast(`Jamline update failed: ${error.message}`)});state.jamline={...state.jamline,...payload};}
   renderTrack();
   if (autoplay) play(); else setPlaying(false);
 }
 function next(auto){
+  if(!jamlineGate())return;
   const n = state.tracks.length; if (!n) return;
   if (state.shuffle && n > 1){ let r; do { r = Math.floor(Math.random() * n); } while (r === state.i); return select(r); }
   if (auto && state.repeat === 'off' && state.i === n - 1){ audio.currentTime = 0; setPlaying(false); renderTime(true); return; }
   select(state.i + 1);
 }
-function prev(){ if ((audio.currentTime || 0) > 3) { audio.currentTime = 0; renderTime(true); } else select(state.i - 1); }
+function prev(){ if(!jamlineGate())return; if ((audio.currentTime || 0) > 3) { audio.currentTime = 0; renderTime(true); } else select(state.i - 1); }
 audio.addEventListener('play', () => setPlaying(true));
 audio.addEventListener('pause', () => setPlaying(false));
 audio.addEventListener('loadedmetadata', () => { lyrNow = -1; renderTime(true); });
@@ -1388,7 +1532,7 @@ function initScroll(){
   const navIO = new IntersectionObserver(es => es.forEach(e => {
     if (e.isIntersecting) links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + e.target.id));
   }), { rootMargin:'-45% 0px -50% 0px' });
-  ['top', 'discover', 'ytImport', 'artist', 'liked', 'library'].forEach(id => { const s = document.getElementById(id); if (s) navIO.observe(s); });
+  ['top', 'discover', 'ytImport', 'artist', 'liked', 'jamline', 'you', 'library'].forEach(id => { const s = document.getElementById(id); if (s) navIO.observe(s); });
 
   if (reduced) return;
   const para = $$('[data-parallax]');
@@ -1797,7 +1941,7 @@ async function deleteTrack(id){
 $$('[data-tilt]').forEach(bindTilt);
 scrubbers.push(...$$('[data-scrub="track"]').map(el => makeScrubber(el,
   () => dur() ? (audio.currentTime || 0) / dur() : 0,
-  r => { if (dur()) { audio.currentTime = r * dur(); lyrNow = -1; renderTime(true); } })));
+  r => { if(!jamlineGate())return; if (dur()) { audio.currentTime = r * dur(); lyrNow = -1; renderTime(true); } })));
 const volScrub = makeScrubber($('#volScrub'), () => state.muted ? 0 : state.vol,
   r => { state.vol = r; state.muted = r === 0; audio.volume = r; audio.muted = state.muted; paintVolume(); }, .05);
 
@@ -1876,6 +2020,7 @@ async function refreshSession(user){
   await reloadTracks();
   const sharedId=new URLSearchParams(location.search).get('track');
   if(sharedId){const index=state.tracks.findIndex(t=>t.id===sharedId);if(index>=0){select(index,false);$('#discover').scrollIntoView({behavior:'instant'});toast(`Ready to listen: ${state.tracks[index].title}`)}else toast('That shared track is unavailable.');}
+  await refreshJamline(); if(state.jamline)startJamlinePolling(); else if(jamlinePollTimer){clearInterval(jamlinePollTimer);jamlinePollTimer=null;}
 }
 if (sb){
   sb.auth.onAuthStateChange((event, session) => {
