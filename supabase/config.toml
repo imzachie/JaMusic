@@ -1,0 +1,4 @@
+[functions.youtube-metadata]
+# The function validates the incoming Supabase JWT itself with auth.getUser(),
+# then enforces the exact owner email + profile username allowlist.
+verify_jwt = false
