@@ -217,6 +217,29 @@ h2.display{font-size:clamp(40px,6vw,80px);font-weight:500;letter-spacing:-.03em;
 
 /* ---------- Artist ---------- */
 .artist{position:relative;padding:var(--section-pad) var(--s4);overflow:hidden;isolation:isolate;background:var(--slate-2)}
+#jamline [hidden]{display:none!important}
+#jamline{margin:clamp(16px,3vw,36px);padding:clamp(24px,4vw,52px);border:1px solid rgba(255,255,255,.09);border-radius:24px;background:radial-gradient(ellipse at 5% 0%,rgba(139,119,205,.12),transparent 42%),linear-gradient(145deg,#202229,#17191f);box-shadow:0 24px 70px rgba(0,0,0,.22)}
+#jamline h2{font-size:clamp(42px,6vw,76px);line-height:1;letter-spacing:-.055em;margin:0 0 12px;font-weight:600}
+#jamline>p:first-of-type{max-width:70ch;color:var(--grey-3);font-size:15px;line-height:1.65;margin:0 0 28px}
+#jamlineCreate,#jamlineControls,#jamlineCohostControl,#jamlineSongControl{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:18px 0 26px}
+#jamline label{display:grid;gap:8px;color:var(--grey-3);font-size:13px;font-weight:600;min-width:min(300px,100%)}
+#jamline input,#jamline select{height:46px;max-width:min(420px,100%);padding:0 14px;border:1px solid rgba(255,255,255,.12);border-radius:12px;background:#14161b;color:var(--offwhite);font:inherit;outline:none;transition:border-color .2s,box-shadow .2s}
+#jamline input:focus,#jamline select:focus{border-color:rgba(190,174,255,.75);box-shadow:0 0 0 3px rgba(190,174,255,.12)}
+#jamline input::placeholder{color:#727681}
+#jamline .btn{min-height:44px;padding:0 20px;border-radius:999px;font-weight:650;letter-spacing:.01em;transition:transform .18s,background .18s,border-color .18s}
+#jamline .btn:hover{transform:translateY(-1px)}
+#jamline .btn.primary{background:linear-gradient(135deg,#c7b7ff,#a996ed);color:#17151d;box-shadow:0 8px 24px rgba(169,150,237,.2)}
+#jamline .btn.ghost{border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.055);color:var(--offwhite)}
+#jamlineInvites,#jamlineRoom{margin-top:24px;padding:20px;border-radius:18px;border:1px solid rgba(255,255,255,.075);background:rgba(255,255,255,.035)}
+#jamline h3{font-size:17px;letter-spacing:-.01em;margin:0 0 14px;color:var(--offwhite)}
+#jamlineInviteList{display:grid;gap:10px}
+#jamlineInviteList .row,#jamlineMembers .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.055)}
+#jamlineInviteList p{margin:0;color:var(--grey-3)}
+#jamlineRoomStatus{font-weight:650;color:var(--offwhite);margin:0 0 16px}
+#jamlineMembers{display:grid;gap:8px;padding:0;list-style:none}
+#jamlineNowPlaying{margin:16px 0 0;padding:14px 16px;border-radius:14px;background:rgba(190,174,255,.08);color:#d7cbff;font-weight:600}
+#jamlineNotice{min-height:1.4em;color:#ffb6b6;font-size:14px;margin:14px 0 0}
+@media(max-width:600px){#jamline{margin:12px;padding:22px 18px;border-radius:18px}#jamlineCreate,#jamlineControls,#jamlineCohostControl,#jamlineSongControl{align-items:stretch;flex-direction:column}#jamline label{min-width:0}#jamline input,#jamline select{max-width:none;width:100%}}
 .artist .bgbox .bgl{opacity:.35;filter:blur(8px);transform:scale(1.05)}
 .artist .bgbox::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,var(--slate-2),rgba(24,27,30,.55) 40%,var(--slate-2))}
 .a-id{display:flex;align-items:center;gap:var(--s2);margin-bottom:var(--s3);color:var(--grey-3);font-size:15px}
@@ -493,6 +516,7 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
   <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9H4z"/></symbol>
   <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></symbol>
   <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 21a7.5 7.5 0 0115 0"/></symbol>
   <symbol id="i-library" viewBox="0 0 24 24"><path d="M5 4v16M10 4v16M15 5.5l5 13.5"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
   <symbol id="i-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
@@ -519,7 +543,7 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
     <li><a href="#liked"><svg class="ic"><use href="#i-heart"/></svg>Liked music</a></li>
     <li><a href="#library"><svg class="ic"><use href="#i-library"/></svg>Library</a></li>
     <li><a href="#jamline"><svg class="ic"><use href="#i-mic"/></svg>Jamline</a></li>
-    <li><a href="#you" id="youNav"><svg class="ic"><use href="#i-mic"/></svg>You</a></li>
+    <li><a href="#you" id="youNav"><svg class="ic"><use href="#i-user"/></svg>You</a></li>
   </ul>
   <p class="nav-foot mono">Upload yours.<br>Hear everyone else's.</p>
 </nav>
@@ -1021,9 +1045,11 @@ async function refreshJamline(){
 async function createJamline(){
  if(!state.user)return openAuth();
  const name=$('#jamlineName').value.trim()||'Jamline';
- const {data,error}=await sb.from('jamlines').insert({name,host_id:state.user.id}).select('*').single();
+ const {error}=await sb.rpc('create_jamline',{p_name:name});
  if(error){$('#jamlineNotice').textContent=error.message;return;}
- await refreshJamline(); startJamlinePolling(); toast('Jamline created. Invite artists to join.');
+ await refreshJamline();
+ if(!state.jamline){$('#jamlineNotice').textContent='Jamline was created, but its host membership did not load. Refresh and try again.';return;}
+ startJamlinePolling(); toast('Jamline created. Invite artists to join.');
 }
 async function sendJamlineInvite(){
  const username=$('#jamlineInviteUsername').value.trim().replace(/^@/,'').toLowerCase();

@@ -190,9 +190,9 @@ drop trigger if exists jamline_guard_update on public.jamlines;
 create trigger jamline_guard_update before update on public.jamlines for each row execute function public.jamline_guard_updates();
 
 drop policy if exists "Jamline members read their rooms" on public.jamlines;
-create policy "Jamline members read their rooms" on public.jamlines for select to authenticated using (public.jamline_is_member(id));
+create policy "Jamline members read their rooms" on public.jamlines for select to authenticated using (public.jamline_is_member(id) or auth.uid() = host_id);
 drop policy if exists "Jamline invitees read invited rooms" on public.jamlines;
-create policy "Jamline invitees read invited rooms" on public.jamlines for select to authenticated using (exists (select 1 from public.jamline_invites i where i.jamline_id = id and i.invitee_id = auth.uid() and i.status = 'pending'));
+create policy "Jamline invitees read invited rooms" on public.jamlines for select to authenticated using (exists (select 1 from public.jamline_invites i where i.jamline_id = public.jamlines.id and i.invitee_id = auth.uid() and i.status = 'pending'));
 drop policy if exists "Users create their own jamlines" on public.jamlines;
 create policy "Users create their own jamlines" on public.jamlines for insert to authenticated with check (auth.uid() = host_id);
 drop policy if exists "Jamline controllers update room state" on public.jamlines;
@@ -219,5 +219,18 @@ drop policy if exists "Invitees accept or decline" on public.jamline_invites;
 create policy "Invitees accept or decline" on public.jamline_invites for update to authenticated using (auth.uid() = invitee_id and status = 'pending') with check (auth.uid() = invitee_id and status in ('accepted','declined'));
 revoke update on public.jamline_invites from authenticated;
 grant update (status) on public.jamline_invites to authenticated;
+
+create or replace function public.create_jamline(p_name text default 'Jamline')
+returns uuid language plpgsql security definer set search_path = public
+as $$
+declare new_id uuid;
+begin
+  if auth.uid() is null then raise exception 'Sign in to create a Jamline'; end if;
+  insert into public.jamlines(name, host_id)
+  values (coalesce(nullif(trim(p_name), ''), 'Jamline'), auth.uid())
+  returning id into new_id;
+  return new_id;
+end $$;
+grant execute on function public.create_jamline(text) to authenticated;
 
 notify pgrst, 'reload schema';
