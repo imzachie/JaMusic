@@ -240,6 +240,26 @@ h2.display{font-size:clamp(40px,6vw,80px);font-weight:500;letter-spacing:-.03em;
 #jamlineNowPlaying{margin:16px 0 0;padding:14px 16px;border-radius:14px;background:rgba(190,174,255,.08);color:#d7cbff;font-weight:600}
 #jamlineNotice{min-height:1.4em;color:#ffb6b6;font-size:14px;margin:14px 0 0}
 @media(max-width:600px){#jamline{margin:12px;padding:22px 18px;border-radius:18px}#jamlineCreate,#jamlineControls,#jamlineCohostControl,#jamlineSongControl{align-items:stretch;flex-direction:column}#jamline label{min-width:0}#jamline input,#jamline select{max-width:none;width:100%}}
+#jamline [hidden]{display:none!important}
+#jamlineJoinedHeading{margin-top:24px!important}
+#jamlineMembers .jam-member{display:flex;align-items:center;gap:12px;min-width:0;flex:1}
+#jamlineMembers .jam-member .av{width:42px;height:42px;border-radius:50%;object-fit:cover;flex:none}
+#jamlineMembers .jam-member .member-names{display:grid;gap:3px;min-width:0}
+#jamlineMembers .jam-member .member-names b{color:var(--offwhite);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#jamlineMembers .jam-member .member-names em{font-size:12px;color:var(--grey-2);font-style:normal}
+#jamlineChat{margin-top:26px;padding:18px;border-radius:16px;background:rgba(0,0,0,.16);border:1px solid rgba(255,255,255,.06)}
+#jamlineChatMessages{display:flex;flex-direction:column;gap:12px;max-height:320px;overflow:auto;padding:4px 2px 14px}
+#jamlineChatMessages .chat-message{display:flex;align-items:flex-start;gap:10px}
+#jamlineChatMessages .chat-message .av{width:34px;height:34px;border-radius:50%;object-fit:cover;flex:none}
+#jamlineChatMessages .chat-message .chat-copy{min-width:0;display:grid;gap:3px}
+#jamlineChatMessages .chat-message .chat-copy b{font-size:13px;color:var(--offwhite)}
+#jamlineChatMessages .chat-message .chat-copy span{font-size:14px;color:var(--grey-3);overflow-wrap:anywhere;white-space:pre-wrap}
+#jamlineChatMessages .chat-message time{font-size:11px;color:var(--grey-2);margin-left:6px;font-weight:400}
+#jamlineChatForm{display:flex;align-items:center;gap:10px;border-top:1px solid rgba(255,255,255,.08);padding-top:14px}
+#jamlineChatForm input{flex:1;width:100%;max-width:none}
+#jamlineLeaveBtn{margin-top:18px}
+@media(max-width:600px){#jamlineCreate,#jamlineControls,#jamlineCohostControl,#jamlineSongControl{align-items:stretch;flex-direction:column}#jamline label{min-width:0}#jamline input,#jamline select{max-width:none;width:100%}}
+
 .artist .bgbox .bgl{opacity:.35;filter:blur(8px);transform:scale(1.05)}
 .artist .bgbox::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,var(--slate-2),rgba(24,27,30,.55) 40%,var(--slate-2))}
 .a-id{display:flex;align-items:center;gap:var(--s2);margin-bottom:var(--s3);color:var(--grey-3);font-size:15px}
@@ -731,9 +751,11 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
           <label>Invite artist by username <input id="jamlineInviteUsername" placeholder="artist_username"></label><button class="btn ghost sm" id="jamlineInviteBtn">Invite</button>
         </div>
         <div id="jamlineCohostControl" hidden><label>Co-host <select id="jamlineCohost"><option value="">Choose a co-host</option></select></label></div>
-        <h3>Listeners</h3><ul id="jamlineMembers" class="tracks"></ul>
+        <h3 id="jamlineJoinedHeading">Joined - 0</h3><ul id="jamlineMembers" class="tracks"></ul>
         <div id="jamlineSongControl" hidden><label>Host / co-host song selection <select id="jamlineSong"><option value="">Choose a song</option></select></label></div>
         <p id="jamlineNowPlaying"></p>
+        <section id="jamlineChat" aria-label="Jamline chat"><h3>Chat</h3><div id="jamlineChatMessages" aria-live="polite"></div><form id="jamlineChatForm"><input id="jamlineChatInput" maxlength="1000" placeholder="Say something to the room…" autocomplete="off"><button class="btn primary sm" type="submit">Send</button></form></section>
+        <button id="jamlineLeaveBtn" class="btn ghost sm">Leave Jamline</button>
       </div>
       <p id="jamlineNotice" role="status"></p>
     </section>
@@ -994,7 +1016,7 @@ const NOT_CONFIGURED = 'Supabase is not connected yet. Add your project URL and 
 
 /* ---------- State (nothing is hardcoded: tracks come from the database) ---------- */
 const state = { tracks:[], i:0, playing:false, vol:.7, muted:false, shuffle:false, repeat:'off',
-                liked:new Set(), user:null, profile:null, query:'', artistId:null, viewedArtist:null, jamline:null, jamlineRole:null, jamlineSyncing:false, jamlineLastWrite:0 };
+                liked:new Set(), user:null, profile:null, query:'', artistId:null, viewedArtist:null, jamline:null, jamlineRole:null, jamlineSyncing:false, jamlineLastWrite:0, jamlineHydrated:false };
 let jamlinePollTimer=null, jamlinePollBusy=false;
 function renderJamlineBase(){
   const signed=!!state.user;
@@ -1026,22 +1048,61 @@ async function refreshJamline(){
   $('#jamlineInviteList').innerHTML=inviteRooms.map(inv=>`<p class="row">${esc(inv.inviter?.display_name||inv.inviter?.username||'An artist')} invited you to <b>${esc(inv.room?.name||'a Jamline')}</b> <button class="btn primary sm" data-jam-accept="${esc(inv.id)}" data-line="${esc(inv.jamline_id)}">Accept</button> <button class="btn ghost sm" data-jam-decline="${esc(inv.id)}">Decline</button></p>`).join('')||'<p>No pending invitations.</p>';
   $('#jamlineInvites').hidden=false;
   const membership=members?.[0];
-  if(!membership){state.jamline=null;state.jamlineRole=null;renderJamlineBase();return;}
+  if(!membership){state.jamline=null;state.jamlineRole=null;state.jamlineHydrated=false;if(jamlinePollTimer){clearInterval(jamlinePollTimer);jamlinePollTimer=null;}renderJamlineBase();return;}
   const {data:room,error:roomErr}=await sb.from('jamlines').select('*').eq('id',membership.jamline_id).maybeSingle();
   if(roomErr||!room)throw roomErr||new Error('Could not load Jamline room.');
+  if(state.jamline?.id!==room.id)state.jamlineHydrated=false;
   state.jamline=room;state.jamlineRole=membership.role;
   const {data:roster,error:rosterErr}=await sb.from('jamline_members').select('user_id,role,joined_at').eq('jamline_id',room.id).order('joined_at');
   if(rosterErr)throw rosterErr;
-  const ids=(roster||[]).map(m=>m.user_id);
-  const {data:profiles}=ids.length?await sb.from('profiles').select('id,username,display_name').in('id',ids):{data:[]};
+  const {data:messages}=await sb.from('jamline_messages').select('id,sender_id,body,created_at').eq('jamline_id',room.id).order('created_at',{ascending:true}).limit(100);
+  const ids=[...new Set([...(roster||[]).map(m=>m.user_id),...(messages||[]).map(m=>m.sender_id)])];
+  const {data:profiles}=ids.length?await sb.from('profiles').select('id,username,display_name,avatar_url').in('id',ids):{data:[]};
   const byId=Object.fromEntries((profiles||[]).map(p=>[p.id,p]));
-  $('#jamlineMembers').innerHTML=(roster||[]).map(m=>`<li class="row"><span class="r-title"><b>${esc(byId[m.user_id]?.display_name||byId[m.user_id]?.username||'Artist')}</b><em>${esc(m.role)}</em></span>${state.jamlineRole==='host'&&m.role!=='host'?`<button class="btn ghost sm" data-jam-cohost="${esc(m.user_id)}">${m.role==='cohost'?'Remove co-host':'Make co-host'}</button>`:''}</li>`).join('');
+  $('#jamlineJoinedHeading').textContent=`Joined - ${(roster||[]).length}`;
+  $('#jamlineMembers').innerHTML=(roster||[]).map(m=>`<li class="row"><span class="jam-member">${avatar(byId[m.user_id],'s')}<span class="member-names"><b>${esc(byId[m.user_id]?.display_name||'Artist')}</b><em>@${esc(byId[m.user_id]?.username||'')} · ${esc(m.role)}</em></span></span>${state.jamlineRole==='host'&&m.role!=='host'?`<button class="btn ghost sm" data-jam-cohost="${esc(m.user_id)}">${m.role==='cohost'?'Remove co-host':'Make co-host'}</button><button class="btn ghost sm" data-jam-kick="${esc(m.user_id)}">Kick</button>`:''}</li>`).join('');
+  renderJamlineMessages(messages||[],byId);
   const co=$('#jamlineCohost');co.innerHTML='<option value="">Choose a co-host</option>'+(roster||[]).filter(m=>m.role!=='host').map(m=>`<option value="${esc(m.user_id)}" ${m.role==='cohost'?'selected':''}>${esc(byId[m.user_id]?.display_name||byId[m.user_id]?.username||'Artist')}</option>`).join('');
   const current=state.tracks.find(t=>t.id===room.current_track_id);
   $('#jamlineNowPlaying').textContent=current?`Now playing: ${current.title} — ${artistName(current)}`:'Host has not picked a song yet.';
   renderJamlineBase();
  }catch(e){$('#jamlineNotice').textContent=`Jamline could not load: ${e.message||e}`;}
 }
+function renderJamlineMessages(messages,profiles){
+ const box=$('#jamlineChatMessages'),atBottom=box.scrollHeight-box.scrollTop-box.clientHeight<48;
+ box.innerHTML=messages.map(m=>{const p=profiles[m.sender_id]||{};const date=m.created_at?new Date(m.created_at):null;return `<article class="chat-message">${avatar(p,'s')}<span class="chat-copy"><b>${esc(p.display_name||p.username||'Artist')} <small>@${esc(p.username||'')}</small><time>${date&&!Number.isNaN(date.valueOf())?date.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}):''}</time></b><span>${esc(m.body)}</span></span></article>`;}).join('')||'<p class="meta">No messages yet. Say hello!</p>';
+ if(atBottom)box.scrollTop=box.scrollHeight;
+}
+async function refreshJamlineMessages(){
+ if(!state.jamline)return;
+ const {data,error}=await sb.from('jamline_messages').select('id,sender_id,body,created_at').eq('jamline_id',state.jamline.id).order('created_at',{ascending:true}).limit(100);
+ if(error)return;
+ const ids=[...new Set((data||[]).map(m=>m.sender_id))];
+ const {data:profiles}=ids.length?await sb.from('profiles').select('id,username,display_name,avatar_url').in('id',ids):{data:[]};
+ renderJamlineMessages(data||[],Object.fromEntries((profiles||[]).map(p=>[p.id,p])));
+}
+async function sendJamlineMessage(event){
+ event.preventDefault();const body=$('#jamlineChatInput').value.trim();if(!body||!state.jamline)return;
+ const {error}=await sb.from('jamline_messages').insert({jamline_id:state.jamline.id,sender_id:state.user.id,body});
+ if(error){$('#jamlineNotice').textContent=`Message wasn't sent: ${error.message}`;return;}
+ $('#jamlineChatInput').value='';await refreshJamlineMessages();
+}
+async function leaveJamline(){
+ if(!state.jamline)return;
+ const {error}=await sb.rpc('leave_jamline',{p_room_id:state.jamline.id});
+ if(error){$('#jamlineNotice').textContent=error.message;return;}
+ state.jamline=null;state.jamlineRole=null;state.jamlineHydrated=false;
+ if(jamlinePollTimer){clearInterval(jamlinePollTimer);jamlinePollTimer=null;}
+ audio.pause();renderJamlineBase();await refreshJamline();toast('You left the Jamline.');
+}
+async function kickJamlineMember(userId){
+ if(!state.jamline||state.jamlineRole!=='host')return;
+ const {error}=await sb.rpc('kick_jamline_member',{p_room_id:state.jamline.id,p_user_id:userId});
+ if(error){$('#jamlineNotice').textContent=error.message;return;}
+ await refreshJamline();toast('Listener removed from the Jamline.');
+}
+$('#jamlineChatForm').addEventListener('submit',sendJamlineMessage);
+$('#jamlineLeaveBtn').addEventListener('click',leaveJamline);
 async function createJamline(){
  if(!state.user)return openAuth();
  const name=$('#jamlineName').value.trim()||'Jamline';
@@ -1076,24 +1137,35 @@ async function electJamlineCohost(id){
 async function setJamlineSong(id){
  if(!state.jamline||!['host','cohost'].includes(state.jamlineRole))return;
  const track=state.tracks.find(t=>t.id===id);if(!track)return;
- const {error}=await sb.from('jamlines').update({current_track_id:id,position_ms:0,is_playing:true}).eq('id',state.jamline.id);
- if(error){$('#jamlineNotice').textContent=error.message;return;}
- jamlineApply={trackId:id,position:0,playing:true};select(state.tracks.indexOf(track),true);await refreshJamline();
+ select(state.tracks.indexOf(track),true);await refreshJamline();
 }
-let jamlineApply=null;
 async function syncJamlineSnapshot(room){
- if(!room?.current_track_id)return;
- const current=cur();
- if(current?.id!==room.current_track_id){const i=state.tracks.findIndex(t=>t.id===room.current_track_id);if(i<0)return;jamlineApply={trackId:room.current_track_id,position:Number(room.position_ms)||0,playing:room.is_playing};state.jamlineSyncing=true;select(i,false);if(audio.readyState>=1)audio.currentTime=(Number(room.position_ms)||0)/1000;else audio.addEventListener('loadedmetadata',()=>{audio.currentTime=(Number(room.position_ms)||0)/1000;},{once:true});state.jamlineSyncing=false;}
- const shouldLead=['host','cohost'].includes(state.jamlineRole);
- if(shouldLead){
+ const leader=['host','cohost'].includes(state.jamlineRole);
+ if(leader){
+  if(!state.jamlineHydrated){
+   state.jamlineHydrated=true;
+   if(room.current_track_id&&cur()?.id!==room.current_track_id){
+    const i=state.tracks.findIndex(t=>t.id===room.current_track_id);
+    if(i>=0){state.jamlineSyncing=true;select(i,false);state.jamlineSyncing=false;}
+   }
+   if(room.current_track_id){const target=(Number(room.position_ms)||0)/1000;if(audio.readyState>=1)audio.currentTime=target;else audio.addEventListener('loadedmetadata',()=>{audio.currentTime=target;},{once:true});if(room.is_playing)audio.play().catch(()=>{});else audio.pause();}
+  }
+  if(room.current_track_id&&cur()?.id!==room.current_track_id){
+   const payload={current_track_id:cur()?.id||null,position_ms:Math.floor((audio.currentTime||0)*1000),is_playing:!audio.paused};
+   const {error}=await sb.from('jamlines').update(payload).eq('id',room.id);if(!error)state.jamline={...state.jamline,...payload};
+   return;
+  }
   if(Date.now()-state.jamlineLastWrite>2200){state.jamlineLastWrite=Date.now();sb.from('jamlines').update({position_ms:Math.floor((audio.currentTime||0)*1000),is_playing:!audio.paused}).eq('id',room.id).then(({error})=>{if(error)console.warn('Jamline sync write failed',error.message);});}
   return;
  }
+ if(!room.current_track_id){audio.pause();state.jamlineHydrated=true;return;}
+ const current=cur();
+ if(current?.id!==room.current_track_id){const i=state.tracks.findIndex(t=>t.id===room.current_track_id);if(i<0)return;state.jamlineSyncing=true;select(i,false);state.jamlineSyncing=false;if(audio.readyState>=1)audio.currentTime=(Number(room.position_ms)||0)/1000;else audio.addEventListener('loadedmetadata',()=>{audio.currentTime=(Number(room.position_ms)||0)/1000;},{once:true});}
  const target=(Number(room.position_ms)||0)/1000;
  if(Math.abs((audio.currentTime||0)-target)>2.2){if(audio.readyState>=1)audio.currentTime=target;else audio.addEventListener('loadedmetadata',()=>{audio.currentTime=target;},{once:true});}
  if(room.is_playing&&audio.paused)audio.play().catch(()=>toast('Tap play once to allow synchronized audio.'));
  if(!room.is_playing&&!audio.paused)audio.pause();
+ state.jamlineHydrated=true;
 }
 async function pollJamline(){
  if(jamlinePollBusy||!state.jamline||!sb)return;jamlinePollBusy=true;
@@ -1103,7 +1175,8 @@ async function pollJamline(){
    sb.from('jamlines').select('*').eq('id',roomId).maybeSingle(),
    sb.from('jamline_members').select('role').eq('jamline_id',roomId).eq('user_id',state.user.id).maybeSingle()
   ]);
-  if(!error&&data){state.jamline=data;if(membership?.role&&membership.role!==state.jamlineRole){state.jamlineRole=membership.role;renderJamlineBase();}await syncJamlineSnapshot(data);}
+  if(!membership?.role){state.jamline=null;state.jamlineRole=null;state.jamlineHydrated=false;audio.pause();if(jamlinePollTimer){clearInterval(jamlinePollTimer);jamlinePollTimer=null;}renderJamlineBase();toast('You are no longer in this Jamline.');return;}
+  if(!error&&data){state.jamline=data;if(membership.role!==state.jamlineRole){state.jamlineRole=membership.role;state.jamlineHydrated=false;renderJamlineBase();}await syncJamlineSnapshot(data);await refreshJamlineMessages();}
  }finally{jamlinePollBusy=false;}
 }
 function startJamlinePolling(){if(jamlinePollTimer)clearInterval(jamlinePollTimer);if(!state.jamline)return;pollJamline();jamlinePollTimer=setInterval(pollJamline,1300);}
@@ -1117,6 +1190,7 @@ document.addEventListener('click',e=>{
  const accept=e.target.closest('[data-jam-accept]');if(accept){respondJamlineInvite(accept.dataset.jamAccept,accept.dataset.line,true);return;}
  const decline=e.target.closest('[data-jam-decline]');if(decline){respondJamlineInvite(decline.dataset.jamDecline,null,false);return;}
  const co=e.target.closest('[data-jam-cohost]');if(co){electJamlineCohost(co.dataset.jamCohost);return;}
+ const kick=e.target.closest('[data-jam-kick]');if(kick){kickJamlineMember(kick.dataset.jamKick);return;}
 });
 
 const audio = new Audio(); audio.preload = 'metadata'; audio.volume = state.vol;
