@@ -323,7 +323,7 @@ body.xp-open button,body.xp-open [role=slider]{cursor:pointer !important}
 /* Upload details and lyric modes */
 .upload-warning{margin:0 0 var(--s3);padding:12px 14px;border:1px solid rgba(239,190,113,.3);border-radius:9px;background:rgba(239,190,113,.08);color:#e6d2b5;font-size:13px;line-height:1.5}
 .upload-warning strong{color:#f3dfbf}
-.yt-workspace{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(300px,.85fr);gap:clamp(24px,4vw,64px);align-items:start}.yt-form{min-width:0}.yt-preview{position:sticky;top:24px;padding:18px;border:1px solid var(--hairline);border-radius:14px;background:rgba(31,35,39,.56)}.yt-preview h3{font-size:18px;font-weight:500;margin:0 0 8px}.yt-preview p{color:var(--grey-2);font-size:13px;line-height:1.5;margin:0 0 14px}.yt-preview-frame{aspect-ratio:16/9;border-radius:9px;overflow:hidden;background:var(--slate-3);display:grid;place-items:center;color:var(--grey-2);font-size:13px;text-align:center;padding:16px}.yt-preview-frame iframe{width:100%;height:100%;border:0}.yt-url-row{display:flex;align-items:center;gap:12px;margin:8px 0}.yt-url-row input{flex:1;min-width:0}
+.yt-workspace{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(300px,.85fr);gap:clamp(24px,4vw,64px);align-items:start}.yt-form{min-width:0}.yt-preview{position:sticky;top:24px;padding:18px;border:1px solid var(--hairline);border-radius:14px;background:rgba(31,35,39,.56)}.yt-preview h3{font-size:18px;font-weight:500;margin:0 0 8px}.yt-preview p{color:var(--grey-2);font-size:13px;line-height:1.5;margin:0 0 14px}.yt-preview-frame{aspect-ratio:16/9;border-radius:9px;overflow:hidden;background:var(--slate-3);display:grid;place-items:center;color:var(--grey-2);font-size:13px;text-align:center;padding:16px}.yt-preview-frame iframe{width:100%;height:100%;border:0}.tubemix-frame{aspect-ratio:auto;height:min(72vh,820px);min-height:580px;padding:0}.tubemix-open{width:100%;justify-content:center;margin-top:12px}.yt-url-row{display:flex;align-items:center;gap:12px;margin:8px 0}.yt-url-row input{flex:1;min-width:0}
 .yt-form input[type=url],.yt-form input[type=text],.yt-form input[type=file],.yt-form textarea{width:100%;min-height:46px;padding:10px 14px;border:1px solid var(--hairline);border-radius:9px;background:var(--slate-3);color:var(--offwhite)}
 .yt-form textarea{min-height:100px;margin:8px 0;resize:vertical}.yt-review-grid{display:grid;grid-template-columns:minmax(200px,.7fr) minmax(0,1.3fr);gap:24px;margin-top:24px}
 .yt-thumbnail{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:10px;background:var(--slate-3)}.yt-fields .two{margin-top:12px}.yt-fields input{margin:6px 0 14px}
@@ -600,10 +600,11 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
           <div class="yt-actions"><button class="btn primary" id="ytPublish" type="submit"><svg class="ic"><use href="#i-cloud-up"/></svg>Upload to JaMusic</button></div>
         </div>
       </form>
-      <aside class="yt-preview" aria-label="YouTube source preview">
-        <h3>Source video</h3>
-        <p>Preview the linked video here. JaMusic does not download or transfer audio from YouTube.</p>
-        <div class="yt-preview-frame" id="ytPreviewFrame"><span id="ytPreviewPlaceholder">Load video details to preview the source.</span><iframe id="ytPreview" title="YouTube video preview" loading="lazy" allow="encrypted-media; picture-in-picture; fullscreen" referrerpolicy="strict-origin-when-cross-origin" hidden></iframe></div>
+      <aside class="yt-preview" aria-label="TubeMixLab">
+        <h3>TubeMixLab</h3>
+        <p>Use the embedded TubeMixLab workspace. Downloads are handled by your browser; JaMusic cannot read files from another site's frame.</p>
+        <div class="yt-preview-frame tubemix-frame"><iframe id="tubemixFrame" title="TubeMixLab" src="https://tubemixlab.com/" loading="lazy" allow="clipboard-read; clipboard-write; downloads" referrerpolicy="strict-origin-when-cross-origin"></iframe></div>
+        <a class="btn ghost tubemix-open" href="https://tubemixlab.com/" target="_blank" rel="noopener noreferrer">Open TubeMixLab in a new tab</a>
       </aside>
       </div>
     </section>
@@ -1469,7 +1470,7 @@ $('#upCover').addEventListener('change', e => {
 $('#upAudio').addEventListener('change', e => { const f = e.target.files[0]; if (f) $('#audioLabel').firstChild.textContent = f.name.length > 22 ? f.name.slice(0, 20) + '...' : f.name; });
 $('#upCancel').addEventListener('click', () => closeDlg($('#uploadDlg')));
 let ytCoverPreviewUrl = null;
-$('#ytUrl').addEventListener('input', () => { ytMetadata = null; $('#ytReview').hidden = true; $('#ytCoverFile').value = ''; $('#ytPreview').hidden = true; $('#ytPreview').src = ''; $('#ytPreviewPlaceholder').hidden = false; if (ytCoverPreviewUrl) URL.revokeObjectURL(ytCoverPreviewUrl); ytCoverPreviewUrl = null; });
+$('#ytUrl').addEventListener('input', () => { ytMetadata = null; $('#ytReview').hidden = true; $('#ytCoverFile').value = ''; if (ytCoverPreviewUrl) URL.revokeObjectURL(ytCoverPreviewUrl); ytCoverPreviewUrl = null; });
 $('#ytCoverFile').addEventListener('change', () => {
   const file = $('#ytCoverFile').files[0];
   if (ytCoverPreviewUrl) URL.revokeObjectURL(ytCoverPreviewUrl);
@@ -1496,8 +1497,6 @@ $('#ytLookup').addEventListener('click', async () => {
     $('#ytGenre').value = '';
     $('#ytThumbnail').src = data.thumbnail_url;
     $('#ytThumbnail').alt = `Thumbnail for ${data.title}`;
-    $('#ytPreview').src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(data.video_id)}`;
-    $('#ytPreview').hidden = false; $('#ytPreviewPlaceholder').hidden = true;
     $('#ytSource').textContent = `YouTube video · ${data.channel_title || 'Unknown channel'} · ${fmt(data.duration_seconds || 0)}. Artist credit on JaMusic will be your JaMusic display name.`;
     $('#ytReview').hidden = false;
     note.textContent = 'Review and edit the details below, attach your own permitted audio file, then upload. Published details cannot be edited.';
