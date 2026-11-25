@@ -2,7 +2,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, apikey, x-client-info, content-type',
+  'Access-Control-Allow-Headers': 'authorization, apikey, x-client-info, x-supabase-api-version, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), {
@@ -26,7 +26,13 @@ function durationSeconds(iso: string): number {
 }
 
 Deno.serve(async request => {
-  if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  try {
+  if (request.method === 'OPTIONS') {
+    const headers = new Headers(corsHeaders);
+    const requestedHeaders = request.headers.get('Access-Control-Request-Headers');
+    if (requestedHeaders) headers.set('Access-Control-Allow-Headers', requestedHeaders);
+    return new Response('ok', { headers });
+  }
   if (request.method !== 'POST') return json({ error: 'Use POST.' }, 405);
   const url = Deno.env.get('SUPABASE_URL');
   const anon = Deno.env.get('SUPABASE_ANON_KEY');
@@ -90,4 +96,8 @@ Deno.serve(async request => {
   if (uploadError) return json({ error: `Could not save YouTube artwork: ${uploadError.message}` }, 502);
   const { data: publicUrl } = admin.storage.from('artwork').getPublicUrl(coverPath);
   return json({ ...metadata, cover_path: coverPath, cover_url: publicUrl.publicUrl });
+  } catch (error) {
+    console.error('youtube-metadata unexpected failure', error);
+    return json({ error: 'The YouTube metadata request failed inside the function. Check the Edge Function logs and retry.' }, 500);
+  }
 });
