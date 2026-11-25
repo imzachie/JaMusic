@@ -34,14 +34,36 @@ function parseLrc(source) {
 }
 
 function yamlToLyrics(source) {
-  // Accept escaped underscores and a whole-document quote wrapper from copied YAML snippets.
+  // Accept serialized notepad YAML, a YAML lyrics string, arrays of timed lines,
+  // and the common { lines: [...] } / { segments: [...] } shapes.
   let normalized = String(source).trim().replace(/\\_/g, '_');
   if ((normalized.startsWith('"') && normalized.endsWith('"')) || (normalized.startsWith("'") && normalized.endsWith("'"))) normalized = normalized.slice(1, -1);
-  const data = load(normalized, { schema: JSON_SCHEMA });
-  if (typeof data === 'string' && data.trim()) return data.trim();
-  if (typeof data?.lyrics === 'string' && data.lyrics.trim()) return data.lyrics.trim();
-  if (!data || !Array.isArray(data.lines) || !data.lines.length) throw new Error('YAML must contain a lyrics string or a top-level “lines” list.');
-  const result = data.lines.map((line, index) => {
+  let data = load(normalized, { schema: JSON_SCHEMA });
+  if (typeof data === 'string') {
+    const inner = data.trim();
+    if (!inner) throw new Error('The YAML lyrics file is empty.');
+    try {
+      const nested = load(inner, { schema: JSON_SCHEMA });
+      if (Array.isArray(nested) || Array.isArray(nested?.lines) || Array.isArray(nested?.segments)) data = nested;
+      else return inner;
+    } catch { return inner; }
+  }
+  if (data && !Array.isArray(data)) {
+    const lyrics = data.lyrics;
+    if (Array.isArray(lyrics)) data = lyrics;
+    else if (typeof lyrics === 'string') {
+      const inner = lyrics.trim();
+      try {
+        const nested = load(inner, { schema: JSON_SCHEMA });
+        if (Array.isArray(nested) || Array.isArray(nested?.lines) || Array.isArray(nested?.segments)) data = nested;
+        else return inner;
+      } catch { return inner; }
+    }
+  }
+  const lines = Array.isArray(data) ? data : Array.isArray(data?.lines) ? data.lines : Array.isArray(data?.segments) ? data.segments : null;
+  if (!lines?.length) throw new Error('YAML must contain lyrics text or a list of timed lines.');
+  if (lines.every(line => typeof line === 'string')) return lines.join('\n');
+  const result = lines.map((line, index) => {
     const rawTime = line?.start_ms != null ? Number(line.start_ms) / 1000 : (line?.time ?? line?.timestamp);
     const validTime = Number.isFinite(Number(rawTime)) || (typeof rawTime === 'string' && /^\d{1,3}:\d{2}(?:\.\d{1,3})?$/.test(rawTime));
     if (!line || typeof line !== 'object' || !validTime) throw new Error(`YAML line ${index + 1} needs start_ms (milliseconds), time (seconds), or an MM:SS.hh timestamp.`);

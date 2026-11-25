@@ -103,6 +103,7 @@ img{display:block;max-width:100%}
 }
 .icon:hover{color:var(--offwhite)}
 .icon.on{color:var(--offwhite)}
+.repeat-control{position:relative;overflow:visible}.repeat-mode-badge{position:absolute;right:-2px;top:-1px;min-width:14px;height:14px;padding:0 3px;display:grid;place-items:center;border:1px solid var(--slate);border-radius:999px;background:var(--accent);color:var(--slate);font:700 9px/1 var(--font-mono);box-shadow:0 0 0 1px rgba(250,249,246,.35)}.repeat-mode-badge[hidden]{display:none}
 .icon.like.on .ic{fill:currentColor}
 .play-btn{
   width:56px;height:56px;border-radius:999px;background:var(--accent);color:var(--slate);
@@ -718,7 +719,7 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
       <button class="icon" data-prev aria-label="Previous track"><svg class="ic fill"><use href="#i-prev"/></svg></button>
       <button class="play-btn sm" data-toggle aria-label="Play"><svg class="ic fill"><use data-ppicon href="#i-play"/></svg></button>
       <button class="icon" data-next aria-label="Next track"><svg class="ic fill"><use href="#i-next"/></svg></button>
-      <button class="icon" id="repeatBtn" aria-label="Repeat: off" aria-pressed="false"><svg class="ic"><use href="#i-repeat"/></svg></button>
+      <button class="icon repeat-control" id="repeatBtn" aria-label="Repeat: off" aria-pressed="false"><svg class="ic"><use href="#i-repeat"/></svg><span class="repeat-mode-badge" aria-hidden="true" hidden></span></button>
     </div>
     <div class="scrubrow mono">
       <span data-cur>0:00</span>
@@ -757,7 +758,7 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
         <button class="icon" data-prev aria-label="Previous track"><svg class="ic fill"><use href="#i-prev"/></svg></button>
         <button class="play-btn" data-toggle aria-label="Play"><svg class="ic fill"><use data-ppicon href="#i-play"/></svg></button>
         <button class="icon" data-next aria-label="Next track"><svg class="ic fill"><use href="#i-next"/></svg></button>
-        <button class="icon" data-repeat-mirror aria-label="Repeat" aria-pressed="false"><svg class="ic"><use href="#i-repeat"/></svg></button>
+        <button class="icon repeat-control" data-repeat-mirror aria-label="Repeat" aria-pressed="false"><svg class="ic"><use href="#i-repeat"/></svg><span class="repeat-mode-badge" aria-hidden="true" hidden></span></button>
       </div>
     </div>
     <div class="xp-right">
@@ -1228,7 +1229,15 @@ function renderModes(){
   $$('[data-shuffle-mirror]').forEach(b => { b.classList.toggle('on', state.shuffle); b.setAttribute('aria-pressed', state.shuffle); });
   const rep = state.repeat !== 'off';
   const repeatLabel = state.repeat === 'all' ? 'Repeat queue' : state.repeat === 'one' ? 'Repeat once' : 'Repeat off';
-  [$('#repeatBtn'), ...$$('[data-repeat-mirror]')].forEach(b => { b.classList.toggle('on', rep); b.setAttribute('aria-pressed', rep); b.setAttribute('aria-label', repeatLabel); b.title = repeatLabel; });
+  [$('#repeatBtn'), ...$$('[data-repeat-mirror]')].forEach(b => {
+    b.classList.toggle('on', rep);
+    b.setAttribute('aria-pressed', rep);
+    b.setAttribute('aria-label', repeatLabel);
+    b.title = repeatLabel;
+    const badge = $('.repeat-mode-badge', b);
+    badge.textContent = state.repeat === 'one' ? '1' : state.repeat === 'all' ? 'Q' : '';
+    badge.hidden = !rep;
+  });
 }
 
 /* ---------- Transport (real HTMLAudioElement) ---------- */
