@@ -330,12 +330,24 @@ body.xp-open button,body.xp-open [role=slider]{cursor:pointer !important}
 .yt-actions{display:flex;justify-content:flex-end;margin-top:16px}.yt-import .field-hint{margin:8px 0}.yt-import #ytNote[data-error="true"]{color:#f3a5a5}
 .lyrics-options{border:0;padding:0;margin:var(--s3) 0 var(--s2);display:grid;gap:8px}
 .lyrics-options legend{font-size:13px;color:var(--grey-3);margin-bottom:8px}
-.lyric-choice{display:flex;align-items:center;gap:11px;padding:11px 13px;border:1px solid var(--hairline);border-radius:9px;background:rgba(31,35,39,.72);cursor:pointer}
-.lyric-choice:has(input:checked){border-color:rgba(250,249,246,.48);background:rgba(250,249,246,.08)}
-.lyric-choice input{accent-color:var(--offwhite);flex:none}
-.lyric-choice span{display:flex;flex-direction:column;gap:2px}
-.lyric-choice strong{font-size:13px;font-weight:500;color:var(--offwhite)}
+.lyric-choice{display:flex;align-items:center;gap:12px;padding:14px 16px;border:1px solid var(--hairline);border-radius:12px;background:linear-gradient(145deg,rgba(31,35,39,.9),rgba(24,27,30,.76));cursor:pointer;transition:border-color .2s ease,background .2s ease,transform .2s ease,box-shadow .2s ease}
+.lyric-choice:hover{border-color:rgba(250,249,246,.32);transform:translateY(-1px)}
+.lyric-choice:has(input:checked){border-color:rgba(250,249,246,.62);background:linear-gradient(145deg,rgba(250,249,246,.11),rgba(250,249,246,.045));box-shadow:inset 0 0 0 1px rgba(250,249,246,.12),0 4px 18px rgba(0,0,0,.12)}
+.lyric-choice input{appearance:none;-webkit-appearance:none;flex:none;width:19px;height:19px;margin:0;border:1.5px solid var(--grey-2);border-radius:50%;background:rgba(17,19,21,.4);display:grid;place-content:center;transition:border-color .2s ease,box-shadow .2s ease}
+.lyric-choice input::before{content:"";width:9px;height:9px;border-radius:50%;background:var(--offwhite);transform:scale(0);transition:transform .16s ease}
+.lyric-choice input:checked{border-color:var(--offwhite);box-shadow:0 0 0 3px rgba(250,249,246,.1)}
+.lyric-choice input:checked::before{transform:scale(1)}
+.lyric-choice input:focus-visible{outline:2px solid var(--offwhite);outline-offset:3px}
+.lyric-choice span{display:flex;flex-direction:column;gap:3px}
+.lyric-choice strong{font-size:13px;font-weight:600;color:var(--offwhite)}
 .lyric-choice small,.field-hint{color:var(--grey-2);font-size:12px;line-height:1.5}
+.yt-form input[type=file]{padding:7px 9px;color:var(--grey-2);cursor:pointer}
+.yt-form input[type=file]::file-selector-button{margin-right:12px;padding:9px 14px;border:1px solid rgba(250,249,246,.16);border-radius:8px;background:linear-gradient(180deg,rgba(250,249,246,.12),rgba(250,249,246,.06));color:var(--offwhite);font:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:background .2s ease,border-color .2s ease,transform .2s ease}
+.yt-form input[type=file]::file-selector-button:hover{background:rgba(250,249,246,.2);border-color:rgba(250,249,246,.3)}
+.yt-form input[type=file]::file-selector-button:active{transform:scale(.98)}
+.yt-actions .btn{min-height:48px;padding:0 22px;border-radius:999px;box-shadow:0 6px 20px rgba(0,0,0,.18);transition:transform .2s ease,box-shadow .2s ease,background .2s ease}
+.yt-actions .btn:hover{transform:translateY(-2px);box-shadow:0 10px 28px rgba(0,0,0,.25)}
+.yt-actions .btn:active{transform:translateY(0) scale(.98)}
 .field-hint{margin:-8px 0 var(--s2)}
 .lyr[data-seek]{cursor:pointer;}
 .lyr[data-seek]:hover{opacity:1;color:var(--offwhite)}
