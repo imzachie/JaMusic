@@ -64,6 +64,42 @@ window.importLyricsFile = (name, source) => {
   throw new Error('Choose an .lrc, .yaml, or .yml lyrics file.');
 };
 
+const lyricsTextArea = document.querySelector('#lyricsNotepadText');
+const lyricsStatus = document.querySelector('#lyricsNotepadStatus');
+document.querySelector('#lyricsPaste')?.addEventListener('click', async () => {
+  try {
+    const copied = await navigator.clipboard.readText();
+    if (!copied) {
+      lyricsStatus.textContent = 'Clipboard is empty. Copy lyrics from LRCLIB, then try again.';
+      return;
+    }
+    const start = lyricsTextArea.selectionStart;
+    const end = lyricsTextArea.selectionEnd;
+    lyricsTextArea.setRangeText(copied, start, end, 'end');
+    lyricsTextArea.dispatchEvent(new Event('input', { bubbles: true }));
+    lyricsTextArea.focus();
+    lyricsStatus.textContent = 'Pasted lyrics from clipboard.';
+  } catch {
+    lyricsTextArea.focus();
+    lyricsStatus.textContent = 'Clipboard access was blocked. Click in the notepad and press Ctrl+V (or Cmd+V).';
+  }
+});
+document.querySelector('#lyricsCopy')?.addEventListener('click', async () => {
+  const text = lyricsTextArea?.value || '';
+  if (!text) {
+    lyricsStatus.textContent = 'There is no notepad text to copy yet.';
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    lyricsStatus.textContent = 'Copied notepad text to clipboard.';
+  } catch {
+    lyricsTextArea.focus();
+    lyricsTextArea.select();
+    lyricsStatus.textContent = 'Clipboard access was blocked. The text is selected; press Ctrl+C (or Cmd+C).';
+  }
+});
+
 const notepadSave = document.querySelector('#lyricsNotepadSave');
 notepadSave?.addEventListener('click', () => {
   const text = document.querySelector('#lyricsNotepadText')?.value || '';
