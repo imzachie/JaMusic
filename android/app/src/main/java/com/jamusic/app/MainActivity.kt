@@ -140,6 +140,9 @@ class MainActivity : ComponentActivity() {
                     respondJamlineInvite = { invite, accept -> respondJamlineInvite(invite, accept) },
                     electJamlineCohost = { room, id -> electJamlineCohost(room, id) },
                     updateJamlinePlayback = { room, track, position, isPlaying -> updateJamlinePlayback(room, track, position, isPlaying) },
+                    leaveJamline = { room -> leaveJamline(room) },
+                    kickJamlineMember = { room, user -> kickJamlineMember(room, user) },
+                    sendJamlineMessage = { room, body -> sendJamlineMessage(room, body) },
                     saveProfile = { profile, avatar, banner -> updateProfile(profile, avatar, banner) },
                     uploadTrack = { title, album, genre, lyricMode, lyricText, audioUri, coverUri -> uploadTrack(title, album, genre, lyricMode, lyricText, audioUri, coverUri) },
                     saveLyrics = { id, lyrics -> saveTrackLyrics(id, lyrics) },
@@ -400,16 +403,27 @@ class MainActivity : ComponentActivity() {
         val roomId = membership.get("jamline_id").asString
         val room = array("jamlines?select=*&id=eq.$roomId").firstOrNull()?.asJsonObject ?: return@withContext JamlineState(invites = inviteModels)
         val roster = array("jamline_members?select=user_id,role&jamline_id=eq.$roomId&order=joined_at")
+        val messages = fetchJamlineMessages(roomId)
+        val ids = (roster.map { it.asJsonObject.get("user_id").asString } + messages.map { it.senderId }).distinct()
+        val profiles = mutableMapOf<String, Profile>()
+        ids.chunked(50).forEach { chunk ->
+            val result = array("profiles?select=*&id=in.(${chunk.joinToString(",")})")
+            result.forEach { val person = profileFromJson(it.asJsonObject); profiles[person.id] = person }
+        }
         val members = roster.map { row ->
             val member = row.asJsonObject
             val id = member.get("user_id").asString
-            val p = array("profiles?select=display_name,username&id=eq.$id").firstOrNull()?.asJsonObject
-            JamlineMember(id, p?.get("display_name")?.asString ?: p?.get("username")?.asString ?: "Artist", member.get("role")?.asString ?: "member")
+            val person = profiles[id]
+            JamlineMember(id, person?.displayName?.ifBlank { person.username } ?: "Artist", person?.username.orEmpty(), person?.avatarUrl.orEmpty(), member.get("role")?.asString ?: "member")
+        }
+        val withProfiles = messages.map { message ->
+            val person = profiles[message.senderId]
+            message.copy(displayName = person?.displayName?.ifBlank { person.username } ?: "Artist", username = person?.username.orEmpty(), avatarUrl = person?.avatarUrl.orEmpty())
         }
         JamlineState(roomId, room.get("name")?.asString ?: "Jamline", room.get("host_id")?.asString.orEmpty(),
             room.get("current_track_id")?.takeUnless { it.isJsonNull }?.asString,
             room.get("position_ms")?.asLong ?: 0L, room.get("is_playing")?.asBoolean ?: false,
-            membership.get("role")?.asString, members, inviteModels)
+            membership.get("role")?.asString, members, inviteModels, withProfiles)
     }
 
     private suspend fun loadJamlinePlayback(roomId: String): JamlineState = withContext(Dispatchers.IO) {
@@ -426,9 +440,35 @@ class MainActivity : ComponentActivity() {
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) null else JsonParser.parseString(body).asJsonArray.firstOrNull()?.asJsonObject?.get("role")?.asString
         }
+        if (role == null) return@withContext JamlineState()
         JamlineState(roomId = room.get("id").asString, name = room.get("name")?.asString.orEmpty(), hostId = room.get("host_id")?.asString.orEmpty(),
             currentTrackId = room.get("current_track_id")?.takeUnless { it.isJsonNull }?.asString,
-            positionMs = room.get("position_ms")?.asLong ?: 0L, isPlaying = room.get("is_playing")?.asBoolean ?: false, role = role)
+            positionMs = room.get("position_ms")?.asLong ?: 0L, isPlaying = room.get("is_playing")?.asBoolean ?: false, role = role,
+            messages = fetchJamlineMessages(roomId))
+    }
+
+    private suspend fun fetchJamlineMessages(roomId: String): List<JamlineMessage> = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
+        val base = BuildConfig.SUPABASE_URL.trimEnd('/')
+        val request = authedRequest("$base/rest/v1/jamline_messages?select=id,sender_id,body,created_at&jamline_id=eq.$roomId&order=created_at.desc&limit=100").get().build()
+        val rows = httpClient.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) return@withContext emptyList()
+            JsonParser.parseString(body).asJsonArray.map { it.asJsonObject }
+        }
+        val ids = rows.mapNotNull { it.get("sender_id")?.asString }.distinct()
+        val profiles = mutableMapOf<String, Profile>()
+        ids.chunked(50).forEach { chunk ->
+            val query = authedRequest("$base/rest/v1/profiles?select=*&id=in.(${chunk.joinToString(",")})").get().build()
+            httpClient.newCall(query).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (response.isSuccessful) JsonParser.parseString(body).asJsonArray.forEach { val person = profileFromJson(it.asJsonObject); profiles[person.id] = person }
+            }
+        }
+        rows.map { row ->
+            val id = row.get("sender_id")?.asString.orEmpty(); val person = profiles[id]
+            JamlineMessage(row.get("id")?.asString.orEmpty(), id, person?.displayName?.ifBlank { person.username } ?: "Artist", person?.username.orEmpty(), person?.avatarUrl.orEmpty(), row.get("body")?.asString.orEmpty(), row.get("created_at")?.asString.orEmpty())
+        }.reversed()
     }
 
     private suspend fun createJamline(name: String) = withContext(Dispatchers.IO) {
@@ -493,6 +533,28 @@ class MainActivity : ComponentActivity() {
         val payload = JSONObject().put("current_track_id", trackId ?: JSONObject.NULL).put("position_ms", positionMs.coerceAtLeast(0)).put("is_playing", isPlaying).toString().toRequestBody(jsonMediaType)
         val request = authedRequest("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/jamlines?id=eq.$roomId").patch(payload).header("Prefer", "return=minimal").build()
         httpClient.newCall(request).execute().use { response -> if (!response.isSuccessful) throw IllegalStateException("Jamline playback update failed (${response.code}).") }
+    }
+
+    private suspend fun leaveJamline(roomId: String) = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
+        val payload = JSONObject().put("p_room_id", roomId).toString().toRequestBody(jsonMediaType)
+        val request = authedRequest("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/rpc/leave_jamline").post(payload).build()
+        httpClient.newCall(request).execute().use { response -> if (!response.isSuccessful) throw IllegalStateException(response.body?.string()?.take(220) ?: "Couldn't leave Jamline.") }
+    }
+
+    private suspend fun kickJamlineMember(roomId: String, userId: String) = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
+        val payload = JSONObject().put("p_room_id", roomId).put("p_user_id", userId).toString().toRequestBody(jsonMediaType)
+        val request = authedRequest("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/rpc/kick_jamline_member").post(payload).build()
+        httpClient.newCall(request).execute().use { response -> if (!response.isSuccessful) throw IllegalStateException(response.body?.string()?.take(220) ?: "Couldn't remove listener.") }
+    }
+
+    private suspend fun sendJamlineMessage(roomId: String, message: String) = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
+        val me = signedInUserId ?: throw IllegalStateException("Sign in to chat.")
+        val payload = JSONObject().put("jamline_id", roomId).put("sender_id", me).put("body", message.trim()).toString().toRequestBody(jsonMediaType)
+        val request = authedRequest("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/jamline_messages").post(payload).header("Prefer", "return=minimal").build()
+        httpClient.newCall(request).execute().use { response -> if (!response.isSuccessful) throw IllegalStateException(response.body?.string()?.take(220) ?: "Message could not be sent.") }
     }
 
     private suspend fun authenticateEmail(email: String, password: String, createAccount: Boolean): String = withContext(Dispatchers.IO) {
@@ -764,12 +826,14 @@ private data class Track(
     val artistProfile: Profile? = null
 )
 private data class FollowData(val followerCounts: Map<String, Int>, val following: Set<String>)
-private data class JamlineMember(val userId: String, val displayName: String, val role: String)
+private data class JamlineMember(val userId: String, val displayName: String, val username: String, val avatarUrl: String, val role: String)
 private data class JamlineInvite(val id: String, val roomId: String, val roomName: String, val inviterName: String)
+private data class JamlineMessage(val id: String, val senderId: String, val displayName: String, val username: String, val avatarUrl: String, val body: String, val createdAt: String)
 private data class JamlineState(
     val roomId: String? = null, val name: String = "", val hostId: String = "",
     val currentTrackId: String? = null, val positionMs: Long = 0L, val isPlaying: Boolean = false,
-    val role: String? = null, val members: List<JamlineMember> = emptyList(), val invites: List<JamlineInvite> = emptyList()
+    val role: String? = null, val members: List<JamlineMember> = emptyList(), val invites: List<JamlineInvite> = emptyList(),
+    val messages: List<JamlineMessage> = emptyList()
 )
 private fun isJamlineController(role: String?) = role == "host" || role == "cohost"
 private data class Profile(
@@ -889,6 +953,9 @@ private fun JaMusicApp(
     respondJamlineInvite: suspend (JamlineInvite, Boolean) -> Unit,
     electJamlineCohost: suspend (String, String?) -> Unit,
     updateJamlinePlayback: suspend (String, String?, Long, Boolean) -> Unit,
+    leaveJamline: suspend (String) -> Unit,
+    kickJamlineMember: suspend (String, String) -> Unit,
+    sendJamlineMessage: suspend (String, String) -> Unit,
     saveProfile: suspend (Profile, Uri?, Uri?) -> Profile,
     uploadTrack: suspend (String, String, String, String, String, Uri?, Uri?) -> String,
     saveLyrics: suspend (String, String) -> Unit,
@@ -909,7 +976,7 @@ private fun JaMusicApp(
     var query by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(true) }
     var loadError by remember { mutableStateOf<String?>(null) }
-    var feedFilter by remember { mutableStateOf("Latest") }
+    var feedFilter by remember { mutableStateOf("All") }
     var favorites by remember { mutableStateOf(emptySet<String>()) }
     var showAuthPrompt by remember { mutableStateOf(false) }
     var email by remember { mutableStateOf("") }
@@ -923,6 +990,7 @@ private fun JaMusicApp(
     var jamlineState by remember { mutableStateOf(JamlineState()) }
     var jamlineName by remember { mutableStateOf("") }
     var jamlineInviteUsername by remember { mutableStateOf("") }
+    var jamlineMessageText by remember { mutableStateOf("") }
     var jamlineError by remember { mutableStateOf<String?>(null) }
     var jamlineBusy by remember { mutableStateOf(false) }
     var followerCounts by remember { mutableStateOf(emptyMap<String, Int>()) }
@@ -1191,16 +1259,42 @@ private fun JaMusicApp(
                                     finally { jamlineBusy = false }
                                 } }, shape = RoundedCornerShape(24.dp)) { Text("Invite") }
                             }
-                            Text("Listeners", color = Cloud, style = MaterialTheme.typography.titleLarge)
+                            Text("Listeners · ${jamlineState.members.size}", color = Cloud, style = MaterialTheme.typography.titleLarge)
                             jamlineState.members.forEach { member ->
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text("${member.displayName} · ${member.role}", Modifier.weight(1f), color = Muted)
+                                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    if (member.avatarUrl.isNotBlank()) AsyncImage(model = member.avatarUrl, contentDescription = "${member.displayName} avatar", modifier = Modifier.size(36.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+                                    else Box(Modifier.size(36.dp).clip(CircleShape).background(Surface), contentAlignment = Alignment.Center) { Text(member.displayName.take(1).uppercase(), color = Violet) }
+                                    Column(Modifier.weight(1f)) { Text(member.displayName, color = Cloud); Text("@${member.username} · ${member.role}", color = Muted, style = MaterialTheme.typography.bodySmall) }
+                                    if (jamlineState.role == "host" && member.role != "host") TextButton(onClick = { scope.launch {
+                                        runCatching { kickJamlineMember(jamlineState.roomId.orEmpty(), member.userId); jamlineState = loadJamline(signedInUserId.orEmpty()) }
+                                            .onFailure { jamlineError = it.message ?: "Couldn't remove listener." }
+                                    } }) { Text("Remove") }
                                     if (jamlineState.role == "host" && member.role != "host") TextButton(onClick = { scope.launch {
                                         val newRole = if (member.role == "cohost") null else member.userId
                                         runCatching { electJamlineCohost(jamlineState.roomId.orEmpty(), newRole); jamlineState = loadJamline(signedInUserId.orEmpty()) }
                                             .onFailure { jamlineError = it.message ?: "Couldn't update co-host." }
                                     } }) { Text(if (member.role == "cohost") "Remove co-host" else "Make co-host") }
                                 }
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                TextButton(onClick = { scope.launch {
+                                    runCatching { leaveJamline(jamlineState.roomId.orEmpty()); jamlineState = loadJamline(signedInUserId.orEmpty()) }
+                                        .onFailure { jamlineError = it.message ?: "Couldn't leave Jamline." }
+                                } }) { Text("Leave Jamline") }
+                            }
+                            Text("Chat", color = Cloud, style = MaterialTheme.typography.titleLarge)
+                            jamlineState.messages.takeLast(40).forEach { message ->
+                                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                                    if (message.avatarUrl.isNotBlank()) AsyncImage(model = message.avatarUrl, contentDescription = null, modifier = Modifier.size(28.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+                                    Column { Text("${message.displayName}  @${message.username}", color = Violet, style = MaterialTheme.typography.labelMedium); Text(message.body, color = Cloud) }
+                                }
+                            }
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(jamlineMessageText, { jamlineMessageText = it }, Modifier.weight(1f), label = { Text("Message the room") }, maxLines = 3)
+                                Button(enabled = jamlineMessageText.isNotBlank(), onClick = { val body = jamlineMessageText.trim(); scope.launch {
+                                    runCatching { sendJamlineMessage(jamlineState.roomId.orEmpty(), body); jamlineMessageText = ""; jamlineState = loadJamline(signedInUserId.orEmpty()) }
+                                        .onFailure { jamlineError = it.message ?: "Message could not be sent." }
+                                } }) { Text("Send") }
                             }
                             if (isJamlineController(jamlineState.role)) {
                                 Text("Choose a song for everyone", color = Cloud, style = MaterialTheme.typography.titleLarge)
