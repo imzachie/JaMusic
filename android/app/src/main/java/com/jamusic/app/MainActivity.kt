@@ -133,6 +133,13 @@ class MainActivity : ComponentActivity() {
                     loadFollowData = { id -> loadFollowData(id) },
                     toggleFollow = { id, follow -> toggleFollow(id, follow) },
                     deleteTrack = { track -> deleteTrack(track) },
+                    loadJamline = { id -> loadJamlineState(id) },
+                    loadJamlinePlayback = { id -> loadJamlinePlayback(id) },
+                    createJamline = { name -> createJamline(name) },
+                    inviteToJamline = { room, username -> inviteToJamline(room, username) },
+                    respondJamlineInvite = { invite, accept -> respondJamlineInvite(invite, accept) },
+                    electJamlineCohost = { room, id -> electJamlineCohost(room, id) },
+                    updateJamlinePlayback = { room, track, position, isPlaying -> updateJamlinePlayback(room, track, position, isPlaying) },
                     saveProfile = { profile, avatar, banner -> updateProfile(profile, avatar, banner) },
                     uploadTrack = { title, album, genre, lyricMode, lyricText, audioUri, coverUri -> uploadTrack(title, album, genre, lyricMode, lyricText, audioUri, coverUri) },
                     saveLyrics = { id, lyrics -> saveTrackLyrics(id, lyrics) },
@@ -366,6 +373,126 @@ class MainActivity : ComponentActivity() {
         }
         removeObject("audio", track.audioPath)
         removeObject("artwork", track.coverPath)
+    }
+
+    private suspend fun loadJamlineState(userId: String): JamlineState = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
+        val base = BuildConfig.SUPABASE_URL.trimEnd('/')
+        fun array(path: String): com.google.gson.JsonArray {
+            val request = authedRequest("$base/rest/v1/$path").get().build()
+            return httpClient.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) throw IllegalStateException("Jamline request failed (${response.code}): ${body.take(200)}")
+                JsonParser.parseString(body).asJsonArray
+            }
+        }
+        val membership = array("jamline_members?select=jamline_id,role,joined_at&user_id=eq.$userId&order=joined_at.desc&limit=1").firstOrNull()?.asJsonObject
+        val invites = array("jamline_invites?select=id,jamline_id,inviter_id&invitee_id=eq.$userId&status=eq.pending&order=created_at.desc")
+        val inviteModels = invites.mapNotNull { row ->
+            val inv = row.asJsonObject
+            val roomId = inv.get("jamline_id")?.asString ?: return@mapNotNull null
+            val room = array("jamlines?select=id,name&id=eq.$roomId").firstOrNull()?.asJsonObject
+            val inviterId = inv.get("inviter_id")?.asString.orEmpty()
+            val inviter = array("profiles?select=display_name,username&id=eq.$inviterId").firstOrNull()?.asJsonObject
+            JamlineInvite(inv.get("id").asString, roomId, room?.get("name")?.asString ?: "Jamline", inviter?.get("display_name")?.asString ?: inviter?.get("username")?.asString ?: "An artist")
+        }
+        if (membership == null) return@withContext JamlineState(invites = inviteModels)
+        val roomId = membership.get("jamline_id").asString
+        val room = array("jamlines?select=*&id=eq.$roomId").firstOrNull()?.asJsonObject ?: return@withContext JamlineState(invites = inviteModels)
+        val roster = array("jamline_members?select=user_id,role&jamline_id=eq.$roomId&order=joined_at")
+        val members = roster.map { row ->
+            val member = row.asJsonObject
+            val id = member.get("user_id").asString
+            val p = array("profiles?select=display_name,username&id=eq.$id").firstOrNull()?.asJsonObject
+            JamlineMember(id, p?.get("display_name")?.asString ?: p?.get("username")?.asString ?: "Artist", member.get("role")?.asString ?: "member")
+        }
+        JamlineState(roomId, room.get("name")?.asString ?: "Jamline", room.get("host_id")?.asString.orEmpty(),
+            room.get("current_track_id")?.takeUnless { it.isJsonNull }?.asString,
+            room.get("position_ms")?.asLong ?: 0L, room.get("is_playing")?.asBoolean ?: false,
+            membership.get("role")?.asString, members, inviteModels)
+    }
+
+    private suspend fun loadJamlinePlayback(roomId: String): JamlineState = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
+        val request = authedRequest("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/jamlines?select=id,name,host_id,current_track_id,position_ms,is_playing&id=eq.$roomId").get().build()
+        val room = httpClient.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException("Jamline sync failed (${response.code}).")
+            JsonParser.parseString(body).asJsonArray.firstOrNull()?.asJsonObject ?: return@withContext JamlineState()
+        }
+        val userId = signedInUserId ?: return@withContext JamlineState()
+        val membershipRequest = authedRequest("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/jamline_members?select=role&jamline_id=eq.$roomId&user_id=eq.$userId").get().build()
+        val role = httpClient.newCall(membershipRequest).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) null else JsonParser.parseString(body).asJsonArray.firstOrNull()?.asJsonObject?.get("role")?.asString
+        }
+        JamlineState(roomId = room.get("id").asString, name = room.get("name")?.asString.orEmpty(), hostId = room.get("host_id")?.asString.orEmpty(),
+            currentTrackId = room.get("current_track_id")?.takeUnless { it.isJsonNull }?.asString,
+            positionMs = room.get("position_ms")?.asLong ?: 0L, isPlaying = room.get("is_playing")?.asBoolean ?: false, role = role)
+    }
+
+    private suspend fun createJamline(name: String) = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
+        val me = signedInUserId ?: throw IllegalStateException("Sign in to create a Jamline.")
+        val payload = JSONObject().put("name", name.ifBlank { "Jamline" }).put("host_id", me).toString().toRequestBody(jsonMediaType)
+        val request = authedRequest("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/jamlines").post(payload).header("Prefer", "return=representation").build()
+        httpClient.newCall(request).execute().use { response -> if (!response.isSuccessful) throw IllegalStateException("Create Jamline failed (${response.code}): ${response.body?.string()?.take(200)}") }
+    }
+
+    private suspend fun inviteToJamline(roomId: String, username: String) = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
+        val me = signedInUserId ?: throw IllegalStateException("Sign in to invite artists.")
+        val base = BuildConfig.SUPABASE_URL.trimEnd('/')
+        val lookup = authedRequest("$base/rest/v1/profiles?select=id&username=eq.${Uri.encode(username.trim().removePrefix("@"))}").get().build()
+        val userId = httpClient.newCall(lookup).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException("Artist lookup failed (${response.code}).")
+            JsonParser.parseString(body).asJsonArray.firstOrNull()?.asJsonObject?.get("id")?.asString
+                ?: throw IllegalStateException("No artist found with that username.")
+        }
+        val payload = JSONObject().put("jamline_id", roomId).put("inviter_id", me).put("invitee_id", userId).toString().toRequestBody(jsonMediaType)
+        val request = authedRequest("$base/rest/v1/jamline_invites").post(payload).header("Prefer", "return=minimal").build()
+        httpClient.newCall(request).execute().use { response -> if (!response.isSuccessful) throw IllegalStateException("Invite failed (${response.code}): ${response.body?.string()?.take(200)}") }
+    }
+
+    private suspend fun respondJamlineInvite(invite: JamlineInvite, accept: Boolean) = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
+        val base = BuildConfig.SUPABASE_URL.trimEnd('/')
+        val payload = JSONObject().put("status", if (accept) "accepted" else "declined").toString().toRequestBody(jsonMediaType)
+        val update = authedRequest("$base/rest/v1/jamline_invites?id=eq.${invite.id}").patch(payload).header("Prefer", "return=minimal").build()
+        httpClient.newCall(update).execute().use { response -> if (!response.isSuccessful) throw IllegalStateException("Invitation response failed (${response.code}).") }
+        if (accept) {
+            val me = signedInUserId ?: throw IllegalStateException("Sign in to join.")
+            val row = JSONObject().put("jamline_id", invite.roomId).put("user_id", me).put("role", "member").toString().toRequestBody(jsonMediaType)
+            val join = authedRequest("$base/rest/v1/jamline_members").post(row).header("Prefer", "return=minimal").build()
+            httpClient.newCall(join).execute().use { response -> if (!response.isSuccessful) throw IllegalStateException("Joining Jamline failed (${response.code}): ${response.body?.string()?.take(200)}") }
+        }
+    }
+
+    private suspend fun electJamlineCohost(roomId: String, userId: String?) = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
+        val base = BuildConfig.SUPABASE_URL.trimEnd('/')
+        val memberRequest = authedRequest("$base/rest/v1/jamline_members?select=user_id,role&jamline_id=eq.$roomId").get().build()
+        val roster = httpClient.newCall(memberRequest).execute().use { response ->
+            val body = response.body?.string().orEmpty(); if (!response.isSuccessful) throw IllegalStateException("Could not load Jamline members.")
+            JsonParser.parseString(body).asJsonArray.map { it.asJsonObject }
+        }
+        roster.filter { it.get("role")?.asString == "cohost" && it.get("user_id")?.asString != userId }.forEach { member ->
+            val id = member.get("user_id").asString
+            val req = authedRequest("$base/rest/v1/jamline_members?jamline_id=eq.$roomId&user_id=eq.$id").patch(JSONObject().put("role", "member").toString().toRequestBody(jsonMediaType)).build()
+            httpClient.newCall(req).execute().use { if (!it.isSuccessful) throw IllegalStateException("Could not replace the current co-host.") }
+        }
+        if (userId != null) {
+            val req = authedRequest("$base/rest/v1/jamline_members?jamline_id=eq.$roomId&user_id=eq.$userId").patch(JSONObject().put("role", "cohost").toString().toRequestBody(jsonMediaType)).build()
+            httpClient.newCall(req).execute().use { if (!it.isSuccessful) throw IllegalStateException("Could not elect co-host.") }
+        }
+    }
+
+    private suspend fun updateJamlinePlayback(roomId: String, trackId: String?, positionMs: Long, isPlaying: Boolean) = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
+        val payload = JSONObject().put("current_track_id", trackId ?: JSONObject.NULL).put("position_ms", positionMs.coerceAtLeast(0)).put("is_playing", isPlaying).toString().toRequestBody(jsonMediaType)
+        val request = authedRequest("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/jamlines?id=eq.$roomId").patch(payload).header("Prefer", "return=minimal").build()
+        httpClient.newCall(request).execute().use { response -> if (!response.isSuccessful) throw IllegalStateException("Jamline playback update failed (${response.code}).") }
     }
 
     private suspend fun authenticateEmail(email: String, password: String, createAccount: Boolean): String = withContext(Dispatchers.IO) {
@@ -637,6 +764,14 @@ private data class Track(
     val artistProfile: Profile? = null
 )
 private data class FollowData(val followerCounts: Map<String, Int>, val following: Set<String>)
+private data class JamlineMember(val userId: String, val displayName: String, val role: String)
+private data class JamlineInvite(val id: String, val roomId: String, val roomName: String, val inviterName: String)
+private data class JamlineState(
+    val roomId: String? = null, val name: String = "", val hostId: String = "",
+    val currentTrackId: String? = null, val positionMs: Long = 0L, val isPlaying: Boolean = false,
+    val role: String? = null, val members: List<JamlineMember> = emptyList(), val invites: List<JamlineInvite> = emptyList()
+)
+private fun isJamlineController(role: String?) = role == "host" || role == "cohost"
 private data class Profile(
     val id: String, val username: String, val displayName: String, val pronouns: String,
     val bio: String, val avatarUrl: String, val bannerUrl: String
@@ -747,6 +882,13 @@ private fun JaMusicApp(
     loadFollowData: suspend (String?) -> FollowData,
     toggleFollow: suspend (String, Boolean) -> Unit,
     deleteTrack: suspend (Track) -> Unit,
+    loadJamline: suspend (String) -> JamlineState,
+    loadJamlinePlayback: suspend (String) -> JamlineState,
+    createJamline: suspend (String) -> Unit,
+    inviteToJamline: suspend (String, String) -> Unit,
+    respondJamlineInvite: suspend (JamlineInvite, Boolean) -> Unit,
+    electJamlineCohost: suspend (String, String?) -> Unit,
+    updateJamlinePlayback: suspend (String, String?, Long, Boolean) -> Unit,
     saveProfile: suspend (Profile, Uri?, Uri?) -> Profile,
     uploadTrack: suspend (String, String, String, String, String, Uri?, Uri?) -> String,
     saveLyrics: suspend (String, String) -> Unit,
@@ -778,6 +920,11 @@ private fun JaMusicApp(
     var profile by remember { mutableStateOf<Profile?>(null) }
     var profileError by remember { mutableStateOf<String?>(null) }
     var socialError by remember { mutableStateOf<String?>(null) }
+    var jamlineState by remember { mutableStateOf(JamlineState()) }
+    var jamlineName by remember { mutableStateOf("") }
+    var jamlineInviteUsername by remember { mutableStateOf("") }
+    var jamlineError by remember { mutableStateOf<String?>(null) }
+    var jamlineBusy by remember { mutableStateOf(false) }
     var followerCounts by remember { mutableStateOf(emptyMap<String, Int>()) }
     var followingIds by remember { mutableStateOf(emptySet<String>()) }
     var viewedArtistId by remember { mutableStateOf<String?>(null) }
@@ -797,6 +944,24 @@ private fun JaMusicApp(
         try { tracks = loadTracks() } catch (error: Exception) { loadError = error.message ?: "Couldn't load uploaded songs." }
         loading = false
     }
+    fun requestPlayTrack(track: Track) {
+        val roomId = jamlineState.roomId
+        if (roomId != null && !isJamlineController(jamlineState.role)) { jamlineError = "Only the host and elected co-host can choose songs."; return }
+        if (roomId == null) { startTrack(player, track, tracks) { activeTrack = it; playerOpen = true }; return }
+        scope.launch {
+            jamlineError = null
+            try {
+                updateJamlinePlayback(roomId, track.id, 0L, true)
+                jamlineState = jamlineState.copy(currentTrackId = track.id, positionMs = 0L, isPlaying = true)
+                startTrack(player, track, listOf(track)) { activeTrack = it; playerOpen = true }
+            } catch (error: Exception) { jamlineError = error.message ?: "Couldn't change the Jamline song." }
+        }
+    }
+    fun setPlaybackState(nextPlaying: Boolean) {
+        if (jamlineState.roomId != null && !isJamlineController(jamlineState.role)) { jamlineError = "Only the host and elected co-host can control playback."; return }
+        if (nextPlaying) player.play() else player.pause()
+        jamlineState.roomId?.let { room -> scope.launch { runCatching { updateJamlinePlayback(room, activeTrack?.id, player.currentPosition, nextPlaying) }.onFailure { jamlineError = it.message ?: "Jamline sync failed." } } }
+    }
     LaunchedEffect(Unit) { refreshTracks() }
     LaunchedEffect(signedInAs) { if (signedInAs != null) showAuthPrompt = false }
     LaunchedEffect(signedInUserId) {
@@ -811,6 +976,35 @@ private fun JaMusicApp(
         val graph = runCatching { loadFollowData(signedInUserId) }.getOrDefault(FollowData(emptyMap(), emptySet()))
         followerCounts = graph.followerCounts
         followingIds = graph.following
+    }
+    LaunchedEffect(signedInUserId) {
+        jamlineState = if (signedInUserId == null) JamlineState() else runCatching { loadJamline(signedInUserId) }.getOrElse { jamlineError = it.message; JamlineState() }
+    }
+    LaunchedEffect(signedInUserId, jamlineState.roomId, jamlineState.role, tracks) {
+        val userId = signedInUserId ?: return@LaunchedEffect
+        while (true) {
+            try {
+                val roomId = jamlineState.roomId
+                val latest = if (roomId == null) loadJamline(userId) else loadJamlinePlayback(roomId).copy(members = jamlineState.members, invites = jamlineState.invites)
+                jamlineState = latest
+                val controller = isJamlineController(latest.role)
+                if (!controller && latest.roomId != null && latest.currentTrackId != null) {
+                    val sharedTrack = tracks.firstOrNull { it.id == latest.currentTrackId }
+                    if (sharedTrack != null) {
+                        if (activeTrack?.id != sharedTrack.id) startTrack(player, sharedTrack, listOf(sharedTrack)) { activeTrack = it; playerOpen = false }
+                        if (player.currentPosition.let { kotlin.math.abs(it - latest.positionMs) } > 2500L && player.duration > 0) player.seekTo(latest.positionMs.coerceIn(0L, player.duration))
+                        if (latest.isPlaying && !player.isPlaying) player.play()
+                        if (!latest.isPlaying && player.isPlaying) player.pause()
+                    }
+                }
+                jamlineError = null
+            } catch (error: Exception) { jamlineError = error.message ?: "Jamline sync unavailable." }
+            delay(if (jamlineState.roomId == null) 5000L else 1400L)
+            if (jamlineState.roomId != null && isJamlineController(jamlineState.role) && activeTrack != null) {
+                runCatching { updateJamlinePlayback(jamlineState.roomId!!, activeTrack?.id, player.currentPosition, player.isPlaying) }
+                    .onFailure { jamlineError = it.message ?: "Couldn't sync Jamline playback." }
+            }
+        }
     }
     LaunchedEffect(activeTrack, playing) { onNowPlayingChanged(activeTrack, playing) }
     LaunchedEffect(shuffleEnabled, repeatMode) {
@@ -855,12 +1049,13 @@ private fun JaMusicApp(
         containerColor = Ink,
         bottomBar = {
             Column {
-                activeTrack?.let { track -> MiniPlayer(track, playing, onToggle = { if (playing) player.pause() else player.play() }, onOpen = { playerOpen = true }) }
+                activeTrack?.let { track -> MiniPlayer(track, playing, onToggle = { setPlaybackState(!playing) }, onOpen = { playerOpen = true }) }
                 NavigationBar(containerColor = Color(0xFF17181D), tonalElevation = 0.dp) {
                     NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = { Icon(Icons.Default.Home, null) }, label = { Text("Home") })
                     NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Icon(Icons.Default.Search, null) }, label = { Text("Search") })
                     NavigationBarItem(selected = tab == 2, onClick = { tab = 2 }, icon = { Icon(Icons.Default.LibraryMusic, null) }, label = { Text("Library") })
                     NavigationBarItem(selected = tab == 3, onClick = { tab = 3; viewedArtistId = null }, icon = { Icon(Icons.Default.AccountCircle, null) }, label = { Text("You") })
+                    NavigationBarItem(selected = tab == 4, onClick = { tab = 4 }, icon = { Icon(Icons.Default.LibraryMusic, null) }, label = { Text("Jamline") })
                 }
             }
         }
@@ -904,7 +1099,7 @@ private fun JaMusicApp(
                     Text("Liked songs", Modifier.padding(start = 22.dp, top = 18.dp, bottom = 8.dp), color = Cloud, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 }
                 itemsIndexed(tracks.filter { it.id in favorites }) { index, track ->
-                    TrackRow(track, index, isFavorite = true, onFavorite = { favorites = favorites - track.id }, onClick = { startTrack(player, track, tracks) { activeTrack = it; playerOpen = true } }, onDelete = if (track.ownerId == signedInUserId) ({ scope.launch { runCatching { deleteTrack(track); refreshTracks() }.onFailure { socialError = it.message ?: "Couldn't delete this track." } } }) else null)
+                    TrackRow(track, index, isFavorite = true, onFavorite = { favorites = favorites - track.id }, onClick = { requestPlayTrack(track) }, onDelete = if (track.ownerId == signedInUserId) ({ scope.launch { runCatching { deleteTrack(track); refreshTracks() }.onFailure { socialError = it.message ?: "Couldn't delete this track." } } }) else null)
                 }
                 if (tracks.none { it.id in favorites }) item { Text("Tap the heart on a song to keep it here.", Modifier.padding(horizontal = 22.dp, vertical = 16.dp), color = Muted) }
             } else if (tab == 3) {
@@ -954,13 +1149,71 @@ private fun JaMusicApp(
                 itemsIndexed(artistTracks) { index, track ->
                     TrackRow(track, index, isFavorite = track.id in favorites,
                         onFavorite = { favorites = if (track.id in favorites) favorites - track.id else favorites + track.id },
-                        onClick = { startTrack(player, track, tracks) { activeTrack = it; playerOpen = true } },
+                        onClick = { requestPlayTrack(track) },
                         onDelete = if (signedInUserId == track.ownerId) ({ scope.launch { runCatching { deleteTrack(track); refreshTracks() }.onFailure { socialError = it.message ?: "Couldn't delete this track." } } }) else null)
+                }
+            } else if (tab == 4) {
+                item {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Jamline", color = Cloud, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+                        Text("Listen in sync. The host and elected co-host are the only people who can choose songs.", color = Muted)
+                        if (signedInUserId == null) Button(onClick = { authError = null; showAuthPrompt = true }, shape = RoundedCornerShape(24.dp)) { Text("Sign in to use Jamline") }
+                        else if (jamlineState.roomId == null) {
+                            OutlinedTextField(jamlineName, { jamlineName = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Jamline name") }, singleLine = true)
+                            Button(enabled = !jamlineBusy, onClick = { scope.launch {
+                                jamlineBusy = true; jamlineError = null
+                                try { createJamline(jamlineName); jamlineName = ""; jamlineState = loadJamline(signedInUserId); }
+                                catch (error: Exception) { jamlineError = error.message ?: "Couldn't create Jamline." }
+                                finally { jamlineBusy = false }
+                            } }, shape = RoundedCornerShape(24.dp)) { Text(if (jamlineBusy) "Creating…" else "Create Jamline") }
+                        }
+                        if (jamlineState.invites.isNotEmpty()) {
+                            Text("Invitations", color = Cloud, style = MaterialTheme.typography.titleLarge)
+                            jamlineState.invites.forEach { invite ->
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text("${invite.inviterName} invited you to ${invite.roomName}", Modifier.weight(1f), color = Muted)
+                                    TextButton(onClick = { scope.launch { runCatching { respondJamlineInvite(invite, true); jamlineState = loadJamline(signedInUserId.orEmpty()) }.onFailure { jamlineError = it.message } } }) { Text("Accept") }
+                                    TextButton(onClick = { scope.launch { runCatching { respondJamlineInvite(invite, false); jamlineState = loadJamline(signedInUserId.orEmpty()) }.onFailure { jamlineError = it.message } } }) { Text("Decline") }
+                                }
+                            }
+                        }
+                        if (jamlineState.roomId != null) {
+                            Text("${jamlineState.name} · ${jamlineState.role}", color = Cloud, style = MaterialTheme.typography.titleLarge)
+                            Text("Room code: ${jamlineState.roomId}", color = Muted, style = MaterialTheme.typography.bodySmall)
+                            val sharedTitle = tracks.firstOrNull { it.id == jamlineState.currentTrackId }?.let { "${it.title} — ${it.artist}" } ?: "Waiting for the host to choose a song"
+                            Text("Now playing: $sharedTitle", color = Violet)
+                            if (jamlineState.role == "host") {
+                                OutlinedTextField(jamlineInviteUsername, { jamlineInviteUsername = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Invite artist by username") }, singleLine = true)
+                                Button(enabled = !jamlineBusy && jamlineInviteUsername.isNotBlank(), onClick = { scope.launch {
+                                    jamlineBusy = true; jamlineError = null
+                                    try { inviteToJamline(jamlineState.roomId.orEmpty(), jamlineInviteUsername); jamlineInviteUsername = ""; jamlineError = "Invitation sent; they must accept to join." }
+                                    catch (error: Exception) { jamlineError = error.message ?: "Couldn't send invite." }
+                                    finally { jamlineBusy = false }
+                                } }, shape = RoundedCornerShape(24.dp)) { Text("Invite") }
+                            }
+                            Text("Listeners", color = Cloud, style = MaterialTheme.typography.titleLarge)
+                            jamlineState.members.forEach { member ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("${member.displayName} · ${member.role}", Modifier.weight(1f), color = Muted)
+                                    if (jamlineState.role == "host" && member.role != "host") TextButton(onClick = { scope.launch {
+                                        val newRole = if (member.role == "cohost") null else member.userId
+                                        runCatching { electJamlineCohost(jamlineState.roomId.orEmpty(), newRole); jamlineState = loadJamline(signedInUserId.orEmpty()) }
+                                            .onFailure { jamlineError = it.message ?: "Couldn't update co-host." }
+                                    } }) { Text(if (member.role == "cohost") "Remove co-host" else "Make co-host") }
+                                }
+                            }
+                            if (isJamlineController(jamlineState.role)) {
+                                Text("Choose a song for everyone", color = Cloud, style = MaterialTheme.typography.titleLarge)
+                                tracks.forEach { track -> TextButton(onClick = { requestPlayTrack(track); playerOpen = true }) { Text("▶  ${track.title} — ${track.artist}", color = Muted) } }
+                            }
+                        }
+                        jamlineError?.let { Text(it, color = if (it.startsWith("Invitation sent")) Violet else MaterialTheme.colorScheme.error) }
+                    }
                 }
             } else {
                 item {
                     Column(Modifier.padding(horizontal = 22.dp, vertical = 12.dp)) {
-                        Text(if (tab == 1) "Search" else "Latest uploads", fontSize = 34.sp, lineHeight = 38.sp, letterSpacing = (-1).sp, fontWeight = FontWeight.SemiBold, color = Cloud)
+                        Text(if (tab == 1) "Search" else "Latest uploads",  fontSize = 34.sp, lineHeight = 38.sp, letterSpacing = (-1).sp, fontWeight = FontWeight.SemiBold, color = Cloud)
                         Text(if (tab == 1) "Find a song from the JaMusic community." else "Fresh tracks, straight from JaMusic artists.", Modifier.padding(top = 7.dp), color = Muted, style = MaterialTheme.typography.bodyLarge)
                     }
                 }
@@ -986,7 +1239,7 @@ private fun JaMusicApp(
                     }
                 }
                 if (tab == 0 && feedFilter == "Latest" && latestTrack != null) item {
-                    LatestUploadCard(latestTrack, onClick = { startTrack(player, latestTrack, tracks) { activeTrack = it; playerOpen = true } })
+                    LatestUploadCard(latestTrack, onClick = { requestPlayTrack(latestTrack) })
                 }
                 if (tab == 0 || tab == 1) item {
                     Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -1011,7 +1264,7 @@ private fun JaMusicApp(
                 itemsIndexed(visibleTracks) { index, track ->
                     TrackRow(track, index, isFavorite = track.id in favorites,
                         onFavorite = { favorites = if (track.id in favorites) favorites - track.id else favorites + track.id },
-                        onClick = { startTrack(player, track, tracks) { activeTrack = it; playerOpen = true } },
+                        onClick = { requestPlayTrack(track) },
                         onDelete = if (track.ownerId == signedInUserId) ({ scope.launch { runCatching { deleteTrack(track); refreshTracks() }.onFailure { socialError = it.message ?: "Couldn't delete this track." } } }) else null)
                 }
                 if (!loading && loadError == null && filtered.isEmpty()) item {
@@ -1026,15 +1279,24 @@ private fun JaMusicApp(
             track = track, player = player, playing = playing, currentMs = currentMs, durationMs = durationMs,
             isFavorite = track.id in favorites,
             onFavorite = { favorites = if (track.id in favorites) favorites - track.id else favorites + track.id },
-            onDismiss = { playerOpen = false }, onToggle = { if (playing) player.pause() else player.play() },
-            onSeek = { player.seekTo(it) },
+            onDismiss = { playerOpen = false }, onToggle = { setPlaybackState(!playing) },
+            onSeek = { position ->
+                if (jamlineState.roomId != null && !isJamlineController(jamlineState.role)) jamlineError = "Only the host and elected co-host can seek."
+                else { player.seekTo(position); jamlineState.roomId?.let { room -> scope.launch { runCatching { updateJamlinePlayback(room, activeTrack?.id, position, playing) }.onFailure { jamlineError = it.message } } } }
+            },
             onPrev = {
-                if (player.currentPosition > 3_000L) player.seekTo(0)
+                if (jamlineState.roomId != null) {
+                    if (!isJamlineController(jamlineState.role)) jamlineError = "Only the host and elected co-host can skip."
+                    else tracks.getOrNull((tracks.indexOfFirst { it.id == track.id } - 1).coerceAtLeast(0))?.let(::requestPlayTrack)
+                } else if (player.currentPosition > 3_000L) player.seekTo(0)
                 else if (player.hasPreviousMediaItem()) player.seekToPreviousMediaItem()
                 else playRelative(tracks, track, -1, player) { activeTrack = it }
             },
             onNext = {
-                if (player.hasNextMediaItem()) player.seekToNextMediaItem()
+                if (jamlineState.roomId != null) {
+                    if (!isJamlineController(jamlineState.role)) jamlineError = "Only the host and elected co-host can skip."
+                    else tracks.getOrNull((tracks.indexOfFirst { it.id == track.id } + 1).coerceAtMost(tracks.lastIndex))?.let(::requestPlayTrack)
+                } else if (player.hasNextMediaItem()) player.seekToNextMediaItem()
                 else playRelative(tracks, track, 1, player) { activeTrack = it }
             },
             shuffleEnabled = shuffleEnabled,
