@@ -38,6 +38,11 @@ Deno.serve(async request => {
   const auth = createClient(url, anon, { global: { headers: { Authorization: authorization } } });
   const { data: { user }, error: authError } = await auth.auth.getUser();
   if (authError || !user) return json({ error: 'Your session expired. Sign in again.' }, 401);
+  const { data: profile, error: profileError } = await auth.from('profiles').select('username').eq('id', user.id).maybeSingle();
+  if (profileError) return json({ error: 'Could not verify the JaMusic owner profile.' }, 503);
+  const isOwner = user.email?.trim().toLowerCase() === 'aidilzafri2013@gmail.com' &&
+    profile?.username?.trim().replace(/^@/, '').toLowerCase() === 'imzachie';
+  if (!isOwner) return json({ error: 'YouTube import is restricted to the JaMusic owner account.' }, 403);
   let body: { video_url?: string; store_thumbnail?: boolean };
   try { body = await request.json(); } catch { return json({ error: 'Send a YouTube URL.' }, 400); }
   const id = typeof body.video_url === 'string' ? parseVideoId(body.video_url) : null;
@@ -47,7 +52,9 @@ Deno.serve(async request => {
   endpoint.searchParams.set('part', 'snippet,contentDetails');
   endpoint.searchParams.set('id', id);
   endpoint.searchParams.set('key', apiKey);
-  const response = await fetch(endpoint);
+  let response: Response;
+  try { response = await fetch(endpoint); }
+  catch (error) { return json({ error: `Could not reach YouTube Data API: ${error instanceof Error ? error.message : 'network error'}` }, 502); }
   const result = await response.json().catch(() => ({}));
   if (!response.ok) return json({ error: result?.error?.message || `YouTube API returned HTTP ${response.status}.` }, 502);
   const video = result?.items?.[0];
@@ -68,7 +75,9 @@ Deno.serve(async request => {
 
   const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   if (!serviceRole) return json({ error: 'Server-side artwork storage is not configured.' }, 500);
-  const image = await fetch(thumbnail);
+  let image: Response;
+  try { image = await fetch(thumbnail); }
+  catch (error) { return json({ error: `Could not fetch the official YouTube thumbnail: ${error instanceof Error ? error.message : 'network error'}` }, 502); }
   if (!image.ok) return json({ error: 'Could not fetch the official YouTube thumbnail.' }, 502);
   const contentType = image.headers.get('content-type')?.split(';')[0] || 'image/jpeg';
   if (!contentType.startsWith('image/')) return json({ error: 'YouTube returned an unsupported thumbnail.' }, 415);

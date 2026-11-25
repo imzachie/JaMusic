@@ -1047,10 +1047,15 @@ function renderCta(){
   else if (state.user){ b.innerHTML = '<svg class="ic"><use href="#i-plus"/></svg>Upload a track'; b.dataset.act = 'upload'; b2.hidden = true; }
   else { b.textContent = 'Create an account'; b.dataset.act = 'signup'; b2.hidden = false; b2.textContent = 'Sign in'; b2.setAttribute('href', '#'); b2.dataset.act = 'signin'; }
 }
+function isYoutubeOwner(){
+  return !!state.user && state.user.email?.trim().toLowerCase() === 'aidilzafri2013@gmail.com' &&
+    state.profile?.username?.trim().replace(/^@/, '').toLowerCase() === 'imzachie';
+}
 function renderAuthUI(){
   const u = state.user, p = state.profile;
   $('#uploadBtn').hidden = !u; $('#signinBtn').hidden = !!u; $('#profileBtn').hidden = !u;
-  $('#ytNav').hidden = !u; $('#ytImport').hidden = !u;
+  const canUseYoutubeImport = isYoutubeOwner();
+  $('#ytNav').hidden = !canUseYoutubeImport; $('#ytImport').hidden = !canUseYoutubeImport;
   if (u) $('#profileBtn').innerHTML = `${avatar(p, 's')}<span>${esc((p && p.display_name) || 'You')}</span>`;
   $('#footAccount').textContent = u ? 'Your profile' : 'Sign in';
   renderCta();
@@ -1469,7 +1474,7 @@ $$('input[name="ytLyricMode"]').forEach(input => input.addEventListener('change'
 }));
 $('#ytLookup').addEventListener('click', async () => {
   const note = $('#ytNote'), button = $('#ytLookup');
-  if (!state.user) return openAuth('signin');
+  if (!isYoutubeOwner()) { note.dataset.error = 'true'; note.textContent = 'YouTube import is restricted to the JaMusic owner account.'; return; }
   if (!sb) return note.textContent = NOT_CONFIGURED;
   const videoUrl = $('#ytUrl').value.trim();
   if (!videoUrl) { note.textContent = 'Paste a YouTube video URL first.'; $('#ytUrl').focus(); return; }
@@ -1495,7 +1500,7 @@ $('#ytLookup').addEventListener('click', async () => {
 $('#ytImportForm').addEventListener('submit', async event => {
   event.preventDefault();
   const note = $('#ytNote'), submit = $('#ytPublish');
-  if (!state.user) return openAuth('signin');
+  if (!isYoutubeOwner()) { note.dataset.error = 'true'; note.textContent = 'YouTube import is restricted to the JaMusic owner account.'; return; }
   if (!sb) return note.textContent = NOT_CONFIGURED;
   if (!ytMetadata) { note.dataset.error = 'true'; note.textContent = 'Load the YouTube details first.'; return; }
   const audioFile = $('#ytAudio').files[0];
