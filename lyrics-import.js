@@ -63,3 +63,44 @@ window.importLyricsFile = (name, source) => {
   if (ext === 'yaml' || ext === 'yml') return yamlToLyrics(source);
   throw new Error('Choose an .lrc, .yaml, or .yml lyrics file.');
 };
+
+const notepadSave = document.querySelector('#lyricsNotepadSave');
+notepadSave?.addEventListener('click', () => {
+  const text = document.querySelector('#lyricsNotepadText')?.value || '';
+  const nameInput = document.querySelector('#lyricsNotepadFilename');
+  const format = document.querySelector('#lyricsNotepadFormat')?.value || 'txt';
+  const status = document.querySelector('#lyricsNotepadStatus');
+  const baseName = (nameInput?.value || 'lyrics').trim().replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'lyrics';
+  if (!text.trim()) {
+    status.textContent = 'Type or paste some lyrics before saving.';
+    return;
+  }
+  if (format === 'pdf') {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      status.textContent = 'Allow pop-ups for JaMusic to print or save a PDF.';
+      return;
+    }
+    printWindow.document.open();
+    printWindow.document.write('<!doctype html><html><head><meta charset="utf-8"><title>Lyrics</title><style>body{font:12pt/1.6 Arial,sans-serif;color:#111;margin:24mm}h1{font-size:18pt;margin:0 0 16pt}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:11pt/1.6 Arial,sans-serif}</style></head><body><h1></h1><pre></pre></body></html>');
+    printWindow.document.close();
+    printWindow.document.title = `${baseName}.pdf`;
+    printWindow.document.querySelector('h1').textContent = baseName;
+    printWindow.document.querySelector('pre').textContent = text;
+    printWindow.focus();
+    printWindow.setTimeout(() => printWindow.print(), 250);
+    status.textContent = 'In the print dialog, choose “Save as PDF” to download your file.';
+    return;
+  }
+  const content = format === 'yaml' || format === 'yml' ? `lyrics: ${JSON.stringify(text)}\n` : text;
+  const blob = new Blob([content], { type: format === 'txt' ? 'text/plain;charset=utf-8' : 'application/yaml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${baseName}.${format}`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  status.textContent = `Downloaded ${baseName}.${format}`;
+});
