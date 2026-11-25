@@ -481,18 +481,11 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun inviteToJamline(roomId: String, username: String) = withContext(Dispatchers.IO) {
         refreshSessionIfNeeded()
-        val me = signedInUserId ?: throw IllegalStateException("Sign in to invite artists.")
-        val base = BuildConfig.SUPABASE_URL.trimEnd('/')
-        val lookup = authedRequest("$base/rest/v1/profiles?select=id&username=eq.${Uri.encode(username.trim().removePrefix("@"))}").get().build()
-        val userId = httpClient.newCall(lookup).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw IllegalStateException("Artist lookup failed (${response.code}).")
-            JsonParser.parseString(body).asJsonArray.firstOrNull()?.asJsonObject?.get("id")?.asString
-                ?: throw IllegalStateException("No artist found with that username.")
+        val payload = JSONObject().put("p_room_id", roomId).put("p_username", username.trim().removePrefix("@")).toString().toRequestBody(jsonMediaType)
+        val request = authedRequest("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/rpc/invite_to_jamline").post(payload).build()
+        httpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IllegalStateException(response.body?.string()?.take(220) ?: "Invitation could not be sent.")
         }
-        val payload = JSONObject().put("jamline_id", roomId).put("inviter_id", me).put("invitee_id", userId).toString().toRequestBody(jsonMediaType)
-        val request = authedRequest("$base/rest/v1/jamline_invites").post(payload).header("Prefer", "return=minimal").build()
-        httpClient.newCall(request).execute().use { response -> if (!response.isSuccessful) throw IllegalStateException("Invite failed (${response.code}): ${response.body?.string()?.take(200)}") }
     }
 
     private suspend fun respondJamlineInvite(invite: JamlineInvite, accept: Boolean) = withContext(Dispatchers.IO) {
@@ -1048,6 +1041,13 @@ private fun JaMusicApp(
     LaunchedEffect(signedInUserId) {
         jamlineState = if (signedInUserId == null) JamlineState() else runCatching { loadJamline(signedInUserId) }.getOrElse { jamlineError = it.message; JamlineState() }
     }
+    LaunchedEffect(signedInUserId) {
+        val userId = signedInUserId ?: return@LaunchedEffect
+        while (true) {
+            delay(7000L)
+            runCatching { loadJamline(userId).invites }.onSuccess { freshInvites -> jamlineState = jamlineState.copy(invites = freshInvites) }
+        }
+    }
     LaunchedEffect(signedInUserId, jamlineState.roomId, jamlineState.role, tracks) {
         val userId = signedInUserId ?: return@LaunchedEffect
         while (true) {
@@ -1250,7 +1250,7 @@ private fun JaMusicApp(
                             Text("Room code: ${jamlineState.roomId}", color = Muted, style = MaterialTheme.typography.bodySmall)
                             val sharedTitle = tracks.firstOrNull { it.id == jamlineState.currentTrackId }?.let { "${it.title} — ${it.artist}" } ?: "Waiting for the host to choose a song"
                             Text("Now playing: $sharedTitle", color = Violet)
-                            if (jamlineState.role == "host") {
+                            if (isJamlineController(jamlineState.role)) {
                                 OutlinedTextField(jamlineInviteUsername, { jamlineInviteUsername = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Invite artist by username") }, singleLine = true)
                                 Button(enabled = !jamlineBusy && jamlineInviteUsername.isNotBlank(), onClick = { scope.launch {
                                     jamlineBusy = true; jamlineError = null
