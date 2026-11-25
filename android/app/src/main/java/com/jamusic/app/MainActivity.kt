@@ -433,9 +433,9 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun createJamline(name: String) = withContext(Dispatchers.IO) {
         refreshSessionIfNeeded()
-        val me = signedInUserId ?: throw IllegalStateException("Sign in to create a Jamline.")
-        val payload = JSONObject().put("name", name.ifBlank { "Jamline" }).put("host_id", me).toString().toRequestBody(jsonMediaType)
-        val request = authedRequest("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/jamlines").post(payload).header("Prefer", "return=representation").build()
+        if (signedInUserId == null) throw IllegalStateException("Sign in to create a Jamline.")
+        val payload = JSONObject().put("p_name", name.ifBlank { "Jamline" }).toString().toRequestBody(jsonMediaType)
+        val request = authedRequest("${BuildConfig.SUPABASE_URL.trimEnd('/')}/rest/v1/rpc/create_jamline").post(payload).build()
         httpClient.newCall(request).execute().use { response -> if (!response.isSuccessful) throw IllegalStateException("Create Jamline failed (${response.code}): ${response.body?.string()?.take(200)}") }
     }
 
