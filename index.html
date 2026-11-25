@@ -627,9 +627,10 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
       <section class="lyrics-notepad" aria-labelledby="lyricsNotepadTitle">
         <div class="lyrics-notepad-head"><div><h3 id="lyricsNotepadTitle">Lyrics notepad</h3><p>Write or edit lyrics here, then download them to your device.</p></div><span class="lyrics-local-badge">Saved to your device</span></div>
         <textarea id="lyricsNotepadText" spellcheck="true" placeholder="Type or paste lyrics here…" aria-label="Lyrics notepad text"></textarea>
+        <p class="field-hint">For LRC export, use timestamped lines such as [00:12.34] Lyric line.</p>
         <div class="lyrics-notepad-tools">
           <label class="sr-only" for="lyricsNotepadFilename">File name</label><input id="lyricsNotepadFilename" type="text" value="lyrics" maxlength="80" placeholder="File name">
-          <label class="sr-only" for="lyricsNotepadFormat">Download format</label><select id="lyricsNotepadFormat"><option value="txt">TXT</option><option value="yaml">YAML</option><option value="yml">YML</option><option value="pdf">PDF</option></select>
+          <label class="sr-only" for="lyricsNotepadFormat">Download format</label><select id="lyricsNotepadFormat"><option value="txt">TXT</option><option value="lrc">LRC</option><option value="yaml">YAML</option><option value="yml">YML</option><option value="pdf">PDF</option></select>
           <button class="btn primary" type="button" id="lyricsNotepadSave">Download file</button>
         </div>
         <p id="lyricsNotepadStatus" class="field-hint" role="status" aria-live="polite">Your text stays in this page until you download it.</p>

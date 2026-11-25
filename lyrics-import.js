@@ -93,7 +93,8 @@ notepadSave?.addEventListener('click', () => {
     return;
   }
   const content = format === 'yaml' || format === 'yml' ? `lyrics: ${JSON.stringify(text)}\n` : text;
-  const blob = new Blob([content], { type: format === 'txt' ? 'text/plain;charset=utf-8' : 'application/yaml;charset=utf-8' });
+  const mimeType = ['txt', 'lrc'].includes(format) ? 'text/plain;charset=utf-8' : 'application/yaml;charset=utf-8';
+  const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
