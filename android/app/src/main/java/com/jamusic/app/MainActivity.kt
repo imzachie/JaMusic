@@ -1143,6 +1143,20 @@ private fun JaMusicApp(
                     }
                 }
             }
+            if (jamlineState.invites.isNotEmpty()) item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).clickable { tab = 4 },
+                    shape = RoundedCornerShape(16.dp), color = Color(0xFF29233A), tonalElevation = 2.dp
+                ) {
+                    Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Text(if (jamlineState.invites.size == 1) "Jamline invitation" else "${jamlineState.invites.size} Jamline invitations", color = Cloud, fontWeight = FontWeight.SemiBold)
+                            Text(if (jamlineState.invites.size == 1) "${jamlineState.invites.first().inviterName} invited you to ${jamlineState.invites.first().roomName}" else "Tap to review your invitations", color = Muted, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Text("View", color = Violet, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
             if (tab == 2) {
                 item {
                     Column(Modifier.padding(horizontal = 22.dp, vertical = 12.dp)) {
