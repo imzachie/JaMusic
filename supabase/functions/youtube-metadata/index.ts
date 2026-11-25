@@ -14,25 +14,25 @@ function parseVideoId(value: string): string | null {
   try {
     const url = new URL(value);
     if (!['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be', 'www.youtu.be'].includes(url.hostname)) return null;
-    const id = url.hostname.endsWith('youtu.be')
-      ? url.pathname.split('/').filter(Boolean)[0]
-      : url.searchParams.get('v') || url.pathname.match(/^\/(?:shorts|embed|live)\/([\w-]+)/)?.[1];
-    return id && /^[\w-]{11}$/.test(id) ? id : null;
+    const parts = url.pathname.split('/').filter(Boolean);
+    let id = url.hostname.endsWith('youtu.be') ? parts[0] : url.searchParams.get('v');
+    if (!id && ['shorts', 'embed', 'live'].includes(parts[0])) id = parts[1];
+    return id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
   } catch { return null; }
 }
 function durationSeconds(iso: string): number {
-  const m = iso.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/);
+  const m = iso.match(/^PT(?:([0-9]+)H)?(?:([0-9]+)M)?(?:([0-9]+)S)?$/);
   return m ? Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Number(m[3] || 0) : 0;
 }
 
 Deno.serve(async request => {
   try {
-  if (request.method === 'OPTIONS') {
-    const headers = new Headers(corsHeaders);
-    const requestedHeaders = request.headers.get('Access-Control-Request-Headers');
-    if (requestedHeaders) headers.set('Access-Control-Allow-Headers', requestedHeaders);
-    return new Response('ok', { headers });
-  }
+    if (request.method === 'OPTIONS') {
+      const headers = new Headers(corsHeaders);
+      const requested = request.headers.get('Access-Control-Request-Headers');
+      if (requested) headers.set('Access-Control-Allow-Headers', requested);
+      return new Response('ok', { headers });
+    }
   if (request.method !== 'POST') return json({ error: 'Use POST.' }, 405);
   const url = Deno.env.get('SUPABASE_URL');
   const anon = Deno.env.get('SUPABASE_ANON_KEY');
