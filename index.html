@@ -1523,6 +1523,7 @@ $('#ytLyricsFile').addEventListener('change', async event => {
   const file = event.target.files?.[0];
   if (!file) return;
   const note = $('#ytNote');
+  $('#ytLyricsFileName').textContent = `Selected ${file.name}`;
   try {
     const source = await file.text();
     $('#ytLyrics').value = window.importLyricsFile(file.name, source);
@@ -1531,8 +1532,7 @@ $('#ytLyricsFile').addEventListener('change', async event => {
     note.dataset.error = 'false';
     note.textContent = 'Lyrics imported from file. Review or edit them before publishing.';
   } catch (error) {
-    $('#ytLyricsFile').value = '';
-    $('#ytLyricsFileName').textContent = 'No file selected';
+    $('#ytLyricsFileName').textContent = `Could not import ${file.name}`;
     note.dataset.error = 'true';
     note.textContent = error.message || 'Could not read that lyrics file.';
   }
