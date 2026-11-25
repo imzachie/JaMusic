@@ -518,6 +518,7 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
     <li><a href="#artist"><svg class="ic"><use href="#i-mic"/></svg>Artist</a></li>
     <li><a href="#liked"><svg class="ic"><use href="#i-heart"/></svg>Liked music</a></li>
     <li><a href="#library"><svg class="ic"><use href="#i-library"/></svg>Library</a></li>
+    <li><a href="#you" id="youNav"><svg class="ic"><use href="#i-mic"/></svg>You</a></li>
   </ul>
   <p class="nav-foot mono">Upload yours.<br>Hear everyone else's.</p>
 </nav>
@@ -691,6 +692,14 @@ html.modal-open .cursor-dot,html.modal-open .cursor-label{display:none !importan
           <ul class="tracks" id="popular"></ul>
         </div>
       </div>
+    </section>
+
+    <section class="artist" id="you" aria-labelledby="youName">
+      <div class="bgbox" id="youBanner" hidden><div class="bgl a on"></div></div>
+      <div class="a-id" id="youAvatar"></div><h2 id="youName">Your profile</h2>
+      <p class="bio" id="youBio"></p><p class="meta mono" id="youStats">Sign in to build your artist profile.</p>
+      <div class="acts"><button class="btn primary sm" id="youEdit" hidden>Edit profile</button><button class="btn ghost sm" id="youSignIn" data-act="signin">Sign in to JaMusic</button></div>
+      <h3>Your tracks</h3><ul class="tracks" id="youTracks"></ul>
     </section>
 
     <!-- Footer -->
@@ -942,7 +951,7 @@ const NOT_CONFIGURED = 'Supabase is not connected yet. Add your project URL and 
 
 /* ---------- State (nothing is hardcoded: tracks come from the database) ---------- */
 const state = { tracks:[], i:0, playing:false, vol:.7, muted:false, shuffle:false, repeat:'off',
-                liked:new Set(), user:null, profile:null, query:'', artistId:null };
+                liked:new Set(), user:null, profile:null, query:'', artistId:null, viewedArtist:null };
 const audio = new Audio(); audio.preload = 'metadata'; audio.volume = state.vol;
 const cur = () => state.tracks[state.i] || null;
 const dur = () => (isFinite(audio.duration) && audio.duration > 0) ? audio.duration : (cur() ? cur().duration : 0);
@@ -978,7 +987,7 @@ async function reloadTracks(){
   const keepId = cur() && cur().id;
   const { data, error } = await sb.from('tracks')
     .select('*')
-    .order('created_at', { ascending:false }).limit(200);
+    .order('created_at', { ascending:false }).limit(1000);
   if (error){ toast(`Could not load tracks: ${error.message}`); console.error('Supabase track query failed:', error); return renderAll(); }
   // Fetch artist profiles separately: installations may have several FKs from tracks to
   // profiles, which makes PostgREST's automatic embedded relationship ambiguous.
@@ -1029,6 +1038,7 @@ function matches(t){
 }
 function rowHTML(idx){
   const t = state.tracks[idx], mine = state.user && t.user_id === state.user.id;
+  const shareUrl = `${location.origin}${location.pathname}?track=${encodeURIComponent(t.id)}`;
   return `<li class="row" data-i="${idx}">
     <button class="row-btn" data-play="${idx}" aria-label="Play ${esc(t.title)} by ${esc(artistName(t))}">
       <span class="lead"><img class="thumb" src="${esc(t.cover_url)}" alt="" loading="lazy"><span class="eq" aria-hidden="true"><i></i><i></i><i></i></span></span>
@@ -1038,6 +1048,7 @@ function rowHTML(idx){
     </button>
     <span class="acts">
       <button class="icon like" data-like="${t.id}" aria-label="Like ${esc(t.title)}" aria-pressed="false"><svg class="ic"><use href="#i-heart"/></svg></button>
+      <button class="icon" data-share="${esc(shareUrl)}" aria-label="Share ${esc(t.title)}" title="Copy track link"><svg class="ic"><use href="#i-library"/></svg></button>
       ${mine ? `<button class="icon" data-edit-lyrics="${t.id}" aria-label="Edit lyrics for ${esc(t.title)}"><svg class="ic"><use href="#i-edit"/></svg></button><button class="icon" data-del="${t.id}" aria-label="Delete ${esc(t.title)}"><svg class="ic"><use href="#i-trash"/></svg></button>` : ''}
     </span>
   </li>`;
@@ -1069,21 +1080,23 @@ function renderLikedTracks(){
   $('#likedSignIn').hidden = !!state.user;
 }
 function renderArtist(){
-  const t = cur(); if (!t) return;
-  state.artistId = t.user_id;
-  const p = t.profiles || {};
-  const mine = state.tracks.map((x, i) => [x, i]).filter(([x]) => x.user_id === t.user_id);
+  const t = cur(), p = state.viewedArtist || t?.profiles || {}; if (!t && !state.viewedArtist) return;
+  const artistId = state.viewedArtist?.id || t?.user_id; state.artistId = artistId;
+  const mine = state.tracks.map((x, i) => [x, i]).filter(([x]) => x.user_id === artistId);
   const bg = $('#artistBg');
   bg.hidden = !p.banner_url;
   if (p.banner_url) $('.bgl', bg).style.backgroundImage = bgUrl(p.banner_url);
   $('#aId').innerHTML = `${avatar(p, 'l')}<span>${esc(p.username ? '@' + p.username : '')}${p.pronouns ? ' / ' + esc(p.pronouns) : ''}</span>`;
   $('#aName').textContent = p.display_name || 'Unknown artist';
+  refreshFollowerCount(artistId, $('#aId'));
   $('#aBio').textContent = p.bio || '';
   $('#aBio').hidden = !p.bio;
   $('#aTracks').textContent = mine.length;
   $('#aRuntime').textContent = fmt(mine.reduce((s, [x]) => s + (x.duration || 0), 0));
   $('#aJoined').textContent = p.created_at ? new Date(p.created_at).getFullYear() : '-';
   $('#popular').innerHTML = mine.map(([, i]) => rowHTML(i)).join('');
+  $('#aFollow')?.remove();
+  const follow = document.createElement('button'); follow.id='aFollow'; follow.className='btn ghost sm'; follow.textContent='Follow artist'; follow.hidden=state.user?.id===artistId; follow.onclick=() => toggleFollow(artistId); $('#aName').after(follow);
   markCurrent(); renderLikes();
 }
 function renderCta(){
@@ -1098,6 +1111,7 @@ function isYoutubeOwner(){
 }
 function renderAuthUI(){
   const u = state.user, p = state.profile;
+  renderYou();
   $('#uploadBtn').hidden = !u; $('#signinBtn').hidden = !!u; $('#profileBtn').hidden = !u;
   const canUseYoutubeImport = isYoutubeOwner() && window.matchMedia('(min-width: 901px)').matches;
   $('#ytNav').hidden = !canUseYoutubeImport; $('#ytImport').hidden = !canUseYoutubeImport;
@@ -1106,13 +1120,34 @@ function renderAuthUI(){
   renderCta();
 }
 window.matchMedia('(min-width: 901px)').addEventListener('change', renderAuthUI);
+let artistSearchTimer;
+async function searchArtists(query){ clearTimeout(artistSearchTimer); artistSearchTimer=setTimeout(async()=>{ if(!sb||query.length<2)return; const {data,error}=await sb.from('profiles').select('id,display_name,username,avatar_url,banner_url,pronouns,bio,created_at').or(`display_name.ilike.%${query}%,username.ilike.%${query}%`).limit(20); if(error)return; const users=data||[]; window.jamArtistProfiles=Object.fromEntries(users.map(p=>[p.id,p])); const old=$('#artistResults'); if(old)old.remove(); if(!users.length)return; const box=document.createElement('section');box.id='artistResults';box.className='artist';box.innerHTML='<h2>Artists</h2>'+users.map(p=>`<article class="row"><button class="row-btn" data-artist-open="${esc(p.id)}"><span class="lead">${avatar(p,'s')}</span><span class="r-title"><b>${esc(p.display_name||p.username)}</b><em>@${esc(p.username||'')} ${esc(p.pronouns||'')}</em></span></button></article>`).join(''); $('#discover').after(box); },250); }
+document.addEventListener('click',e=>{const b=e.target.closest('[data-artist-open]'); if(!b)return; const id=b.dataset.artistOpen; const p=window.jamArtistProfiles?.[id]; if(!p)return; state.viewedArtist=p; renderArtist(); $('#artist').scrollIntoView({behavior:'smooth'});});
+function renderYou(){
+  const p=state.profile, u=state.user;
+  $('#youName').textContent=p?.display_name || (u ? 'Your profile' : 'Your profile');
+  $('#youAvatar').innerHTML= p ? `${avatar(p,'l')}<span>${esc(p.username ? '@'+p.username : '')}${p.pronouns ? ' / '+esc(p.pronouns) : ''}</span>` : '';
+  $('#youBio').textContent=p?.bio || '';
+  $('#youStats').textContent=u ? 'Your JaMusic artist profile' : 'Sign in to build your artist profile.'; if(u)refreshFollowerCount(u.id,$('#youStats'));
+  $('#youEdit').hidden=!u; $('#youSignIn').hidden=!!u;
+  const banner=$('#youBanner'); banner.hidden=!p?.banner_url; if(p?.banner_url) $('.bgl',banner).style.backgroundImage=bgUrl(p.banner_url);
+  $('#youTracks').innerHTML=state.tracks.map((t,i)=>[t,i]).filter(([t])=>u&&t.user_id===u.id).map(([,i])=>rowHTML(i)).join('');
+}
+async function refreshFollowerCount(id, target){ if(!sb||!id)return; const {count,error}=await sb.from('follows').select('follower_id',{count:'exact',head:true}).eq('following_id',id); if(!error&&target){let n=target.querySelector('.followers');if(!n){n=document.createElement('span');n.className='followers';target.append(' · ',n)}n.textContent=`${count||0} followers`;}}
+async function toggleFollow(id){
+ if(!state.user) return openAuth();
+ try { const {data,error}=await sb.from('follows').select('follower_id').eq('follower_id',state.user.id).eq('following_id',id).maybeSingle(); if(error) throw error;
+   const result=data ? await sb.from('follows').delete().eq('follower_id',state.user.id).eq('following_id',id) : await sb.from('follows').insert({follower_id:state.user.id,following_id:id});
+   if(result.error) throw result.error; toast(data?'Unfollowed artist.':'Following artist.'); refreshFollowerCount(id,$('#aId')); if(state.profile?.id===id)refreshFollowerCount(id,$('#youStats'));
+ } catch(e){toast(`Could not update follow: ${e.message}`)}
+}
 function renderAll(){
   const has = state.tracks.length > 0;
   $('#np').hidden = !has; $('#npEmpty').hidden = has;
   $('#bar').hidden = !has;
   // Keep sidebar destinations available even before the first track is uploaded.
   $('#discover').hidden = false; $('#artist').hidden = false;
-  renderCta(); renderLists();
+  renderCta(); renderLists(); renderYou();
   if (has) renderTrack();
   else {
     $('#aName').textContent = 'Artists';
@@ -1145,7 +1180,7 @@ function renderTrack(){
   lyrNow = -1;
   document.title = `${t.title} / JaMusic`;
   markCurrent(); renderLikes(); renderTime(true);
-  if (state.artistId !== t.user_id) renderArtist();
+  if (state.artistId !== t.user_id || state.viewedArtist) { state.viewedArtist=null; renderArtist(); }
 }
 
 /* Background crossfade (two stacked layers) */
@@ -1718,6 +1753,7 @@ function paintPfPreview(banner, avatarUrl){
 }
 $('#pfBannerIn').addEventListener('change', e => { const f = e.target.files[0]; if (!f) return; pfBannerFile = f; $('#pfBanner').style.backgroundImage = bgUrl(URL.createObjectURL(f)); });
 $('#pfAvatarIn').addEventListener('change', e => { const f = e.target.files[0]; if (!f) return; pfAvatarFile = f; $('#pfAvatar').innerHTML = `<img src="${URL.createObjectURL(f)}" alt="" style="width:100%;height:100%;object-fit:cover">`; });
+$('#youEdit').addEventListener('click', openProfile);
 $('#pfCancel').addEventListener('click', () => closeDlg($('#profileDlg')));
 $('#pfSignout').addEventListener('click', async () => { if (sb) await sb.auth.signOut(); closeDlg($('#profileDlg')); toast('Signed out.'); });
 $('#profileForm').addEventListener('submit', async e => {
@@ -1766,6 +1802,8 @@ const volScrub = makeScrubber($('#volScrub'), () => state.muted ? 0 : state.vol,
   r => { state.vol = r; state.muted = r === 0; audio.volume = r; audio.muted = state.muted; paintVolume(); }, .05);
 
 document.addEventListener('click', e => {
+  const share = e.target.closest('[data-share]');
+  if(share){ e.preventDefault(); e.stopPropagation(); navigator.clipboard?.writeText(share.dataset.share).then(()=>toast('Track link copied.')).catch(()=>prompt('Copy this track link',share.dataset.share)); return; }
   const editLyrics = e.target.closest('[data-edit-lyrics]');
   if (editLyrics){ e.preventDefault(); e.stopPropagation(); openLyricsEditor(editLyrics.dataset.editLyrics); return; }
   const lyric = e.target.closest('.lyr[data-seek]');
@@ -1823,6 +1861,7 @@ document.addEventListener('keydown', e => {
 $('#search').addEventListener('input', e => {
   state.query = e.target.value.trim().toLowerCase();
   renderLists(); markCurrent(); renderLikes();
+  if(state.query && sb) searchArtists(state.query);
   if (state.query && state.tracks.length) $('#discover').scrollIntoView({ behavior: reduced ? 'auto' : 'smooth' });
 });
 
@@ -1835,6 +1874,8 @@ async function refreshSession(user){
   await ensureProfile(); renderAuthUI();
   await loadLikes();
   await reloadTracks();
+  const sharedId=new URLSearchParams(location.search).get('track');
+  if(sharedId){const index=state.tracks.findIndex(t=>t.id===sharedId);if(index>=0){select(index,false);$('#discover').scrollIntoView({behavior:'instant'});toast(`Ready to listen: ${state.tracks[index].title}`)}else toast('That shared track is unavailable.');}
 }
 if (sb){
   sb.auth.onAuthStateChange((event, session) => {
