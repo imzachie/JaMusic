@@ -16,9 +16,10 @@ function parseLrc(source) {
   const output = [];
   for (const raw of source.split(/\r?\n/)) {
     // Standard and enhanced LRC: [line cue]<word cue>word<word cue>word
-    const lineMatch = raw.match(/^\[(\d{1,3}):(\d{2})\.(\d{1,3})\](.*)$/);
+    const lineMatch = raw.match(/^\[(\d{1,3}):(\d{2})(?:\.(\d{1,3}))?\](.*)$/);
     if (!lineMatch) continue; // Ignore [ti:], [ar:], and other metadata tags.
-    const time = Number(lineMatch[1]) * 60 + Number(lineMatch[2]) + Number((lineMatch[3] + '00').slice(0, 2)) / 100;
+    const fraction = lineMatch[3] || '0';
+    const time = Number(lineMatch[1]) * 60 + Number(lineMatch[2]) + Number((fraction + '00').slice(0, 2)) / 100;
     const rest = lineMatch[4].trim();
     if (!rest) continue;
     const enhanced = rest.match(/<\d{1,3}:\d{2}\.\d{1,3}>/);
@@ -37,7 +38,9 @@ function yamlToLyrics(source) {
   let normalized = String(source).trim().replace(/\\_/g, '_');
   if ((normalized.startsWith('"') && normalized.endsWith('"')) || (normalized.startsWith("'") && normalized.endsWith("'"))) normalized = normalized.slice(1, -1);
   const data = load(normalized, { schema: JSON_SCHEMA });
-  if (!data || !Array.isArray(data.lines) || !data.lines.length) throw new Error('YAML needs a top-level “lines” list. See the example below.');
+  if (typeof data === 'string' && data.trim()) return data.trim();
+  if (typeof data?.lyrics === 'string' && data.lyrics.trim()) return data.lyrics.trim();
+  if (!data || !Array.isArray(data.lines) || !data.lines.length) throw new Error('YAML must contain a lyrics string or a top-level “lines” list.');
   const result = data.lines.map((line, index) => {
     const rawTime = line?.start_ms != null ? Number(line.start_ms) / 1000 : (line?.time ?? line?.timestamp);
     const validTime = Number.isFinite(Number(rawTime)) || (typeof rawTime === 'string' && /^\d{1,3}:\d{2}(?:\.\d{1,3})?$/.test(rawTime));
