@@ -38,6 +38,14 @@ create table if not exists public.likes (
   primary key (user_id, track_id)
 );
 
+create table if not exists public.follows (
+  follower_id uuid not null references public.profiles(id) on delete cascade,
+  following_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (follower_id, following_id),
+  constraint follows_no_self_follow check (follower_id <> following_id)
+);
+
 grant select on public.profiles to anon, authenticated;
 grant insert, update on public.profiles to authenticated;
 grant select on public.tracks to anon, authenticated;
@@ -45,14 +53,18 @@ grant insert, delete on public.tracks to authenticated;
 revoke update on public.tracks from public, anon, authenticated;
 grant update (lyrics) on public.tracks to authenticated;
 grant select, insert, delete on public.likes to authenticated;
+grant select on public.follows to anon, authenticated;
+grant insert, delete on public.follows to authenticated;
 
 create index if not exists tracks_created_at_idx on public.tracks (created_at desc);
 create index if not exists tracks_user_id_idx on public.tracks (user_id);
 create index if not exists likes_track_id_idx on public.likes (track_id);
+create index if not exists follows_following_id_idx on public.follows (following_id);
 
 alter table public.profiles enable row level security;
 alter table public.tracks enable row level security;
 alter table public.likes enable row level security;
+alter table public.follows enable row level security;
 
 drop policy if exists "Profiles are public" on public.profiles;
 create policy "Profiles are public" on public.profiles for select using (true);
@@ -76,6 +88,13 @@ drop policy if exists "Users like tracks as themselves" on public.likes;
 create policy "Users like tracks as themselves" on public.likes for insert to authenticated with check (auth.uid() = user_id);
 drop policy if exists "Users remove their own likes" on public.likes;
 create policy "Users remove their own likes" on public.likes for delete to authenticated using (auth.uid() = user_id);
+
+drop policy if exists "Follows are publicly readable" on public.follows;
+create policy "Follows are publicly readable" on public.follows for select using (true);
+drop policy if exists "Users follow as themselves" on public.follows;
+create policy "Users follow as themselves" on public.follows for insert to authenticated with check (auth.uid() = follower_id);
+drop policy if exists "Users unfollow as themselves" on public.follows;
+create policy "Users unfollow as themselves" on public.follows for delete to authenticated using (auth.uid() = follower_id);
 
 insert into storage.buckets (id, name, public, file_size_limit)
 values

@@ -3,9 +3,12 @@ package com.jamusic.app
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.BroadcastReceiver
-import android.content.Context
 import android.content.Intent
+import android.widget.Toast
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
@@ -42,6 +45,10 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
@@ -123,6 +130,9 @@ class MainActivity : ComponentActivity() {
                     signedInUserId = signedInUserId,
                     authNotice = authNotice,
                     loadProfile = { id -> loadOrCreateProfile(id) },
+                    loadFollowData = { id -> loadFollowData(id) },
+                    toggleFollow = { id, follow -> toggleFollow(id, follow) },
+                    deleteTrack = { track -> deleteTrack(track) },
                     saveProfile = { profile, avatar, banner -> updateProfile(profile, avatar, banner) },
                     uploadTrack = { title, album, genre, lyricMode, lyricText, audioUri, coverUri -> uploadTrack(title, album, genre, lyricMode, lyricText, audioUri, coverUri) },
                     saveLyrics = { id, lyrics -> saveTrackLyrics(id, lyrics) },
@@ -251,13 +261,21 @@ class MainActivity : ComponentActivity() {
         val headers = { builder: Request.Builder -> builder.header("apikey", BuildConfig.SUPABASE_PUBLISHABLE_KEY).header("Authorization", "Bearer ${BuildConfig.SUPABASE_PUBLISHABLE_KEY}") }
         // Keep this as a plain tracks query. PostgREST relationship embeds were returning HTTP 300
         // in the app, so artist profiles are resolved with one explicit id-in query below.
-        val tracksRequest = headers(Request.Builder().url("$baseUrl/rest/v1/tracks?select=*&order=created_at.desc&limit=100")).build()
-        val tracks = httpClient.newCall(tracksRequest).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw IllegalStateException("Supabase tracks query returned ${response.code}: ${body.take(220)}")
-            JsonParser.parseString(body).asJsonArray.mapNotNull { row ->
+        val tracks = mutableListOf<Track>()
+        var offset = 0
+        while (true) {
+            val tracksRequest = headers(Request.Builder()
+                .url("$baseUrl/rest/v1/tracks?select=*&order=created_at.desc&limit=1000&offset=$offset")
+                .header("Range", "$offset-${offset + 999}")).build()
+            val page = httpClient.newCall(tracksRequest).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) throw IllegalStateException("Supabase tracks query returned ${response.code}: ${body.take(220)}")
+                val rows = JsonParser.parseString(body).asJsonArray
+                rows.size() to rows.mapNotNull { row ->
                 val obj = row.asJsonObject
+                val audioPath = obj.get("audio_path")?.takeUnless { it.isJsonNull }?.asString.orEmpty()
                 val audio = obj.get("audio_url")?.takeUnless { it.isJsonNull }?.asString.orEmpty()
+                    .ifBlank { if (audioPath.isNotBlank()) "$baseUrl/storage/v1/object/public/audio/${Uri.encode(audioPath, "/")}" else "" }
                 if (audio.isBlank()) null else Track(
                     id = obj.get("id")?.asString.orEmpty(),
                     ownerId = obj.get("user_id")?.asString.orEmpty(),
@@ -267,24 +285,87 @@ class MainActivity : ComponentActivity() {
                     cover = obj.get("cover_url")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
                     audio = audio,
                     lyrics = obj.get("lyrics")?.takeUnless { it.isJsonNull }?.asString.orEmpty(),
-                    duration = obj.get("duration")?.asLong ?: 0L
+                    duration = obj.get("duration")?.asLong ?: 0L,
+                    audioPath = audioPath,
+                    coverPath = obj.get("cover_path")?.takeUnless { it.isJsonNull }?.asString.orEmpty()
                 )
             }
+            }
+            tracks.addAll(page.second)
+            if (page.first < 1000) break
+            offset += 1000
         }
         val ownerIds = tracks.map { it.ownerId }.filter { it.isNotBlank() }.distinct()
         if (ownerIds.isEmpty()) return@withContext tracks
-        val profileUrl = "$baseUrl/rest/v1/profiles?select=id,display_name,username&id=in.(${ownerIds.joinToString(",")})"
-        val profileRequest = headers(Request.Builder().url(profileUrl)).build()
-        val artists = httpClient.newCall(profileRequest).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) emptyMap() else JsonParser.parseString(body).asJsonArray.associate { row ->
-                val profile = row.asJsonObject
-                val id = profile.get("id")?.asString.orEmpty()
-                id to (profile.get("display_name")?.takeUnless { it.isJsonNull }?.asString
-                    ?: profile.get("username")?.takeUnless { it.isJsonNull }?.asString ?: "JaMusic artist")
+        val artists = mutableMapOf<String, Profile>()
+        ownerIds.chunked(50).forEach { ids ->
+            val profileUrl = "$baseUrl/rest/v1/profiles?select=*&id=in.(${ids.joinToString(",")})"
+            val profileRequest = headers(Request.Builder().url(profileUrl)).build()
+            httpClient.newCall(profileRequest).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (response.isSuccessful) JsonParser.parseString(body).asJsonArray.forEach { row ->
+                    val profile = profileFromJson(row.asJsonObject)
+                    artists[profile.id] = profile
+                }
             }
         }
-        tracks.map { it.copy(artist = artists[it.ownerId] ?: "JaMusic artist") }
+        tracks.map { track ->
+            val artistProfile = artists[track.ownerId]
+            track.copy(artist = artistProfile?.displayName?.ifBlank { artistProfile.username } ?: "JaMusic artist", artistProfile = artistProfile)
+        }
+    }
+
+    private suspend fun loadFollowData(currentUserId: String?): FollowData = withContext(Dispatchers.IO) {
+        val base = BuildConfig.SUPABASE_URL.trimEnd('/')
+        val request = Request.Builder().url("$base/rest/v1/follows?select=follower_id,following_id&limit=5000")
+            .header("apikey", BuildConfig.SUPABASE_PUBLISHABLE_KEY)
+            .header("Authorization", "Bearer ${BuildConfig.SUPABASE_PUBLISHABLE_KEY}").get().build()
+        val rows = httpClient.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) return@withContext FollowData(emptyMap(), emptySet())
+            JsonParser.parseString(body).asJsonArray.map { it.asJsonObject }
+        }
+        val counts = rows.groupingBy { it.get("following_id")?.asString.orEmpty() }.eachCount()
+        val following = rows.filter { it.get("follower_id")?.asString == currentUserId }.mapNotNull { it.get("following_id")?.asString }.toSet()
+        FollowData(counts, following)
+    }
+
+    private suspend fun toggleFollow(profileId: String, follow: Boolean) = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
+        val me = signedInUserId ?: throw IllegalStateException("Sign in to follow artists.")
+        require(me != profileId) { "You can't follow yourself." }
+        val base = BuildConfig.SUPABASE_URL.trimEnd('/')
+        val request = if (follow) {
+            val body = JSONObject().put("follower_id", me).put("following_id", profileId).toString().toRequestBody(jsonMediaType)
+            authedRequest("$base/rest/v1/follows").post(body).header("Prefer", "return=minimal,resolution=ignore-duplicates").build()
+        } else {
+            authedRequest("$base/rest/v1/follows?follower_id=eq.$me&following_id=eq.$profileId").delete().build()
+        }
+        httpClient.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException("Follow update failed (${response.code}): ${body.take(180)}")
+        }
+    }
+
+    private suspend fun deleteTrack(track: Track) = withContext(Dispatchers.IO) {
+        refreshSessionIfNeeded()
+        require(track.ownerId == signedInUserId) { "You can only delete your own tracks." }
+        val base = BuildConfig.SUPABASE_URL.trimEnd('/')
+        val request = authedRequest("$base/rest/v1/tracks?id=eq.${Uri.encode(track.id)}").delete().build()
+        httpClient.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException("Track delete failed (${response.code}): ${body.take(180)}")
+        }
+        suspend fun removeObject(bucket: String, path: String) {
+            if (path.isBlank()) return
+            val payload = JSONObject().put("prefixes", org.json.JSONArray().put(path)).toString().toRequestBody(jsonMediaType)
+            val delete = authedRequest("$base/storage/v1/object/$bucket").delete(payload).build()
+            httpClient.newCall(delete).execute().use { response ->
+                if (!response.isSuccessful) throw IllegalStateException("Track deleted, but its $bucket file could not be removed (${response.code}).")
+            }
+        }
+        removeObject("audio", track.audioPath)
+        removeObject("artwork", track.coverPath)
     }
 
     private suspend fun authenticateEmail(email: String, password: String, createAccount: Boolean): String = withContext(Dispatchers.IO) {
@@ -552,8 +633,10 @@ private fun JaTheme(content: @Composable () -> Unit) {
 private data class Track(
     val id: String, val title: String, val artist: String, val album: String,
     val cover: String, val audio: String, val lyrics: String, val duration: Long,
-    val ownerId: String = ""
+    val ownerId: String = "", val audioPath: String = "", val coverPath: String = "",
+    val artistProfile: Profile? = null
 )
+private data class FollowData(val followerCounts: Map<String, Int>, val following: Set<String>)
 private data class Profile(
     val id: String, val username: String, val displayName: String, val pronouns: String,
     val bio: String, val avatarUrl: String, val bannerUrl: String
@@ -661,6 +744,9 @@ private fun JaMusicApp(
     signedInUserId: String?,
     authNotice: String?,
     loadProfile: suspend (String) -> Profile,
+    loadFollowData: suspend (String?) -> FollowData,
+    toggleFollow: suspend (String, Boolean) -> Unit,
+    deleteTrack: suspend (Track) -> Unit,
     saveProfile: suspend (Profile, Uri?, Uri?) -> Profile,
     uploadTrack: suspend (String, String, String, String, String, Uri?, Uri?) -> String,
     saveLyrics: suspend (String, String) -> Unit,
@@ -691,6 +777,10 @@ private fun JaMusicApp(
     var authError by remember { mutableStateOf<String?>(null) }
     var profile by remember { mutableStateOf<Profile?>(null) }
     var profileError by remember { mutableStateOf<String?>(null) }
+    var socialError by remember { mutableStateOf<String?>(null) }
+    var followerCounts by remember { mutableStateOf(emptyMap<String, Int>()) }
+    var followingIds by remember { mutableStateOf(emptySet<String>()) }
+    var viewedArtistId by remember { mutableStateOf<String?>(null) }
     var showProfileEditor by remember { mutableStateOf(false) }
     var profileSaving by remember { mutableStateOf(false) }
     var showUploadPrompt by remember { mutableStateOf(false) }
@@ -717,6 +807,11 @@ private fun JaMusicApp(
             catch (error: Exception) { profileError = error.message ?: "Couldn't load your profile." }
         }
     }
+    LaunchedEffect(tracks, signedInUserId) {
+        val graph = runCatching { loadFollowData(signedInUserId) }.getOrDefault(FollowData(emptyMap(), emptySet()))
+        followerCounts = graph.followerCounts
+        followingIds = graph.following
+    }
     LaunchedEffect(activeTrack, playing) { onNowPlayingChanged(activeTrack, playing) }
     LaunchedEffect(shuffleEnabled, repeatMode) {
         player.shuffleModeEnabled = shuffleEnabled
@@ -742,7 +837,12 @@ private fun JaMusicApp(
         }
     }
 
+    val artists = tracks.mapNotNull { it.artistProfile }.distinctBy { it.id }
     val searched = tracks.filter { it.title.contains(query, true) || it.artist.contains(query, true) }
+    val matchingArtists = if (query.isBlank()) emptyList() else artists.filter { artist ->
+        listOf(artist.displayName, artist.username, artist.pronouns, artist.bio).any { it.contains(query, true) }
+    }
+    val viewedArtist = viewedArtistId?.let { id -> artists.firstOrNull { it.id == id } }
     val filtered = when (feedFilter) {
         "Liked" -> searched.filter { it.id in favorites }
         "Latest" -> searched.take(8)
@@ -759,7 +859,8 @@ private fun JaMusicApp(
                 NavigationBar(containerColor = Color(0xFF17181D), tonalElevation = 0.dp) {
                     NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = { Icon(Icons.Default.Home, null) }, label = { Text("Home") })
                     NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Icon(Icons.Default.Search, null) }, label = { Text("Search") })
-                    NavigationBarItem(selected = tab == 2, onClick = { tab = 2; if (signedInAs == null) { authError = null; showAuthPrompt = true } }, icon = { Icon(Icons.Default.LibraryMusic, null) }, label = { Text("Library") })
+                    NavigationBarItem(selected = tab == 2, onClick = { tab = 2 }, icon = { Icon(Icons.Default.LibraryMusic, null) }, label = { Text("Library") })
+                    NavigationBarItem(selected = tab == 3, onClick = { tab = 3; viewedArtistId = null }, icon = { Icon(Icons.Default.AccountCircle, null) }, label = { Text("You") })
                 }
             }
         }
@@ -768,7 +869,7 @@ private fun JaMusicApp(
             item {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text("JaMusic", style = MaterialTheme.typography.headlineSmall, color = Cloud, fontWeight = FontWeight.Bold)
-                    IconButton(onClick = { if (signedInAs == null) { authError = null; showAuthPrompt = true } else showProfileEditor = true }) {
+                    IconButton(onClick = { tab = 3; viewedArtistId = null }) {
                         Surface(shape = CircleShape, color = Panel, modifier = Modifier.size(44.dp)) {
                             Box(contentAlignment = Alignment.Center) {
                                 val avatar = profile?.avatarUrl.orEmpty()
@@ -803,9 +904,59 @@ private fun JaMusicApp(
                     Text("Liked songs", Modifier.padding(start = 22.dp, top = 18.dp, bottom = 8.dp), color = Cloud, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 }
                 itemsIndexed(tracks.filter { it.id in favorites }) { index, track ->
-                    TrackRow(track, index, isFavorite = true, onFavorite = { favorites = favorites - track.id }, onClick = { startTrack(player, track, tracks) { activeTrack = it; playerOpen = true } })
+                    TrackRow(track, index, isFavorite = true, onFavorite = { favorites = favorites - track.id }, onClick = { startTrack(player, track, tracks) { activeTrack = it; playerOpen = true } }, onDelete = if (track.ownerId == signedInUserId) ({ scope.launch { runCatching { deleteTrack(track); refreshTracks() }.onFailure { socialError = it.message ?: "Couldn't delete this track." } } }) else null)
                 }
                 if (tracks.none { it.id in favorites }) item { Text("Tap the heart on a song to keep it here.", Modifier.padding(horizontal = 22.dp, vertical = 16.dp), color = Muted) }
+            } else if (tab == 3) {
+                val shownProfile = viewedArtist ?: profile
+                item {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 12.dp)) {
+                        if (viewedArtistId != null) TextButton(onClick = { viewedArtistId = null }) { Icon(Icons.Default.ArrowBack, null); Spacer(Modifier.width(6.dp)); Text("Back to You") }
+                        shownProfile?.bannerUrl?.takeIf { it.isNotBlank() }?.let { banner ->
+                            AsyncImage(banner, contentDescription = "${shownProfile.displayName} banner", modifier = Modifier.fillMaxWidth().height(150.dp).clip(RoundedCornerShape(20.dp)), contentScale = ContentScale.Crop)
+                        }
+                        Row(Modifier.padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            val avatar = shownProfile?.avatarUrl.orEmpty()
+                            if (avatar.isNotBlank()) AsyncImage(avatar, contentDescription = "Profile picture", modifier = Modifier.size(64.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+                            else Surface(shape = CircleShape, color = Panel, modifier = Modifier.size(64.dp)) { Box(contentAlignment = Alignment.Center) { Text(shownProfile?.displayName?.take(1)?.uppercase() ?: "?", color = Violet, fontWeight = FontWeight.Bold, fontSize = 24.sp) } }
+                            Column(Modifier.padding(start = 14.dp).weight(1f)) {
+                                Text(shownProfile?.displayName ?: if (signedInAs == null) "Your profile" else signedInAs.orEmpty(), color = Cloud, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                                shownProfile?.let { Text("@${it.username}" + if (it.pronouns.isNotBlank()) " · ${it.pronouns}" else "", color = Violet, style = MaterialTheme.typography.bodySmall) }
+                            }
+                        }
+                        shownProfile?.bio?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.padding(top = 14.dp), color = Muted, style = MaterialTheme.typography.bodyLarge) }
+                        Text("${followerCounts[shownProfile?.id] ?: 0} followers", Modifier.padding(top = 12.dp), color = Muted)
+                        if (viewedArtistId != null && shownProfile != null) {
+                            val isFollowing = shownProfile.id in followingIds
+                            Button(onClick = {
+                                if (signedInUserId == null) { tab = 2 }
+                                else scope.launch {
+                                    try {
+                                        toggleFollow(shownProfile.id, !isFollowing)
+                                        followingIds = if (isFollowing) followingIds - shownProfile.id else followingIds + shownProfile.id
+                                        followerCounts = followerCounts + (shownProfile.id to ((followerCounts[shownProfile.id] ?: 0) + if (isFollowing) -1 else 1))
+                                    } catch (error: Exception) { socialError = error.message ?: "Couldn't update follow." }
+                                }
+                            }, modifier = Modifier.padding(top = 12.dp), shape = RoundedCornerShape(24.dp)) { Text(if (isFollowing) "Following" else "Follow") }
+                        } else if (signedInUserId != null) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 12.dp)) {
+                                OutlinedButton(onClick = { showProfileEditor = true }, shape = RoundedCornerShape(22.dp), enabled = profile != null) { Text("Edit profile") }
+                                TextButton(onClick = onSignOut) { Text("Sign out") }
+                            }
+                        } else {
+                            Button(onClick = { authError = null; showAuthPrompt = true }, modifier = Modifier.padding(top = 12.dp), shape = RoundedCornerShape(24.dp)) { Text("Sign in to edit your profile") }
+                        }
+                        socialError?.let { Text(it, Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.error) }
+                    }
+                }
+                val artistTracks = shownProfile?.let { artist -> tracks.filter { it.ownerId == artist.id } }.orEmpty()
+                item { Text("Tracks", Modifier.padding(start = 22.dp, top = 14.dp, bottom = 8.dp), color = Cloud, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold) }
+                itemsIndexed(artistTracks) { index, track ->
+                    TrackRow(track, index, isFavorite = track.id in favorites,
+                        onFavorite = { favorites = if (track.id in favorites) favorites - track.id else favorites + track.id },
+                        onClick = { startTrack(player, track, tracks) { activeTrack = it; playerOpen = true } },
+                        onDelete = if (signedInUserId == track.ownerId) ({ scope.launch { runCatching { deleteTrack(track); refreshTracks() }.onFailure { socialError = it.message ?: "Couldn't delete this track." } } }) else null)
+                }
             } else {
                 item {
                     Column(Modifier.padding(horizontal = 22.dp, vertical = 12.dp)) {
@@ -815,6 +966,24 @@ private fun JaMusicApp(
                 }
                 if (tab == 1) item {
                     OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp), leadingIcon = { Icon(Icons.Default.Search, null) }, placeholder = { Text("Search songs or artists") }, shape = RoundedCornerShape(24.dp), singleLine = true)
+                }
+                if (tab == 1 && matchingArtists.isNotEmpty()) {
+                    item { Text("Artists", Modifier.padding(start = 22.dp, top = 8.dp, bottom = 4.dp), color = Cloud, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold) }
+                    itemsIndexed(matchingArtists) { _, artist ->
+                        ArtistSearchRow(artist, followerCounts[artist.id] ?: 0, artist.id in followingIds,
+                            onOpen = { viewedArtistId = artist.id; tab = 3 },
+                            onFollow = {
+                                if (signedInUserId == null) tab = 2
+                                else scope.launch {
+                                    val wasFollowing = artist.id in followingIds
+                                    try {
+                                        toggleFollow(artist.id, !wasFollowing)
+                                        followingIds = if (wasFollowing) followingIds - artist.id else followingIds + artist.id
+                                        followerCounts = followerCounts + (artist.id to ((followerCounts[artist.id] ?: 0) + if (wasFollowing) -1 else 1))
+                                    } catch (error: Exception) { socialError = error.message ?: "Couldn't update follow." }
+                                }
+                            })
+                    }
                 }
                 if (tab == 0 && feedFilter == "Latest" && latestTrack != null) item {
                     LatestUploadCard(latestTrack, onClick = { startTrack(player, latestTrack, tracks) { activeTrack = it; playerOpen = true } })
@@ -842,7 +1011,8 @@ private fun JaMusicApp(
                 itemsIndexed(visibleTracks) { index, track ->
                     TrackRow(track, index, isFavorite = track.id in favorites,
                         onFavorite = { favorites = if (track.id in favorites) favorites - track.id else favorites + track.id },
-                        onClick = { startTrack(player, track, tracks) { activeTrack = it; playerOpen = true } })
+                        onClick = { startTrack(player, track, tracks) { activeTrack = it; playerOpen = true } },
+                        onDelete = if (track.ownerId == signedInUserId) ({ scope.launch { runCatching { deleteTrack(track); refreshTracks() }.onFailure { socialError = it.message ?: "Couldn't delete this track." } } }) else null)
                 }
                 if (!loading && loadError == null && filtered.isEmpty()) item {
                     Text(if (tracks.isEmpty()) "No public uploads yet." else if (feedFilter == "Liked") "No liked tracks yet. Tap a heart to add one." else "No matching uploads.", Modifier.padding(22.dp), color = Muted)
@@ -1143,15 +1313,35 @@ private fun playRelative(tracks: List<Track>, current: Track, step: Int, player:
 }
 
 @Composable
-private fun TrackRow(track: Track, index: Int, isFavorite: Boolean, onFavorite: () -> Unit, onClick: () -> Unit) {
+private fun ArtistSearchRow(profile: Profile, followers: Int, following: Boolean, onOpen: () -> Unit, onFollow: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (profile.avatarUrl.isNotBlank()) AsyncImage(profile.avatarUrl, contentDescription = "${profile.displayName} profile picture", modifier = Modifier.size(48.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+        else Surface(shape = CircleShape, color = Panel, modifier = Modifier.size(48.dp)) { Box(contentAlignment = Alignment.Center) { Text(profile.displayName.take(1).uppercase(), color = Violet, fontWeight = FontWeight.Bold) } }
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            Text(profile.displayName, color = Cloud, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("@${profile.username} · $followers followers", color = Muted, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        TextButton(onClick = onFollow) { Text(if (following) "Following" else "Follow") }
+    }
+}
+
+@Composable
+private fun TrackRow(track: Track, index: Int, isFavorite: Boolean, onFavorite: () -> Unit, onClick: () -> Unit, onDelete: (() -> Unit)? = null) {
+    val context = LocalContext.current
+    var confirmDelete by remember(track.id) { mutableStateOf(false) }
+    val shareLink = "https://jamusic.pages.dev/?track=${Uri.encode(track.id)}"
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 20.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
         Cover(track, Modifier.size(58.dp), index)
-        Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
             Text(track.title, color = Cloud, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(track.artist + if (track.album.isBlank()) "" else " · ${track.album}", color = Muted, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        IconButton(onClick = { context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, "${track.title} — ${track.artist}\n$shareLink"), "Share track")) }) { Icon(Icons.Default.Share, contentDescription = "Share ${track.title}", tint = Muted, modifier = Modifier.size(19.dp)) }
+        IconButton(onClick = { (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("JaMusic track link", shareLink)); Toast.makeText(context, "Track link copied", Toast.LENGTH_SHORT).show() }) { Icon(Icons.Default.Link, contentDescription = "Copy ${track.title} link", tint = Muted, modifier = Modifier.size(19.dp)) }
         IconButton(onClick = onFavorite) { Icon(if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = if (isFavorite) "Unlike ${track.title}" else "Like ${track.title}", tint = if (isFavorite) Violet else Muted, modifier = Modifier.size(21.dp)) }
+        if (onDelete != null) IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, contentDescription = "Delete ${track.title}", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp)) }
     }
+    if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Delete track?") }, text = { Text("Delete ‘${track.title}’ from JaMusic? This can’t be undone.") }, confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete?.invoke() }) { Text("Delete", color = MaterialTheme.colorScheme.error) } }, dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } })
 }
 
 @Composable
