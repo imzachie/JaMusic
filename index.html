@@ -1494,7 +1494,12 @@ $('#ytLookup').addEventListener('click', async () => {
     $('#ytLyrics').hidden = $('input[name="ytLyricMode"]:checked')?.value !== 'manual';
   } catch (error) {
     ytMetadata = null; $('#ytReview').hidden = true;
-    note.dataset.error = 'true'; note.textContent = error.message || 'Could not load YouTube details. Check the link and server API key.';
+    console.error('YouTube metadata request failed', error, error?.context, error?.cause);
+    const detail = error?.context?.message || error?.context?.cause?.message || error?.cause?.message;
+    note.dataset.error = 'true';
+    note.textContent = detail
+      ? `YouTube request failed: ${detail}`
+      : (error.message || 'Could not load YouTube details. Check the link and server API key.');
   } finally { button.disabled = false; }
 });
 $('#ytImportForm').addEventListener('submit', async event => {
