@@ -236,6 +236,8 @@ h2.display{font-size:clamp(40px,6vw,80px);font-weight:500;letter-spacing:-.03em;
 #jamlineInviteList .row,#jamlineMembers .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 14px;border-radius:14px;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.055)}
 #jamlineInviteList p{margin:0;color:var(--grey-3)}
 #jamlineRoomStatus{font-weight:650;color:var(--offwhite);margin:0 0 16px}
+#youBio{margin:24px 0 18px;line-height:1.65;max-width:62ch}
+#youStats{margin-bottom:18px}
 #jamlineMembers{display:grid;gap:8px;padding:0;list-style:none}
 #jamlineNowPlaying{margin:16px 0 0;padding:14px 16px;border-radius:14px;background:rgba(190,174,255,.08);color:#d7cbff;font-weight:600}
 #jamlineNotice{min-height:1.4em;color:#ffb6b6;font-size:14px;margin:14px 0 0}
@@ -1022,7 +1024,7 @@ const NOT_CONFIGURED = 'Supabase is not connected yet. Add your project URL and 
 
 /* ---------- State (nothing is hardcoded: tracks come from the database) ---------- */
 const state = { tracks:[], i:0, playing:false, vol:.7, muted:false, shuffle:false, repeat:'off',
-                liked:new Set(), user:null, profile:null, query:'', artistId:null, viewedArtist:null, jamline:null, jamlineRole:null, jamlineSyncing:false, jamlineLastWrite:0, jamlineHydrated:false };
+                liked:new Set(), user:null, profile:null, query:'', artistId:null, viewedArtist:null, jamline:null, jamlineRole:null, jamlineHostName:'', jamlineSyncing:false, jamlineLastWrite:0, jamlineHydrated:false };
 let jamlinePollTimer=null, jamlinePollBusy=false;
 function renderJamlineBase(){
   const signed=!!state.user;
@@ -1030,8 +1032,8 @@ function renderJamlineBase(){
   $('#jamlineRoom').hidden=!state.jamline; $('#jamlineInvites').hidden=!signed;
   const room=state.jamline; if(!room)return;
   const controller=['host','cohost'].includes(state.jamlineRole);
-  $('#jamlineRoomStatus').textContent=`${room.name} · ${state.jamlineRole||'member'} · room code ${room.id}`;
-  $('#jamlineControls').hidden=state.jamlineRole!=='host';
+  $('#jamlineRoomStatus').textContent=`${state.jamlineHostName||'Host'} - Host | ${room.name}`;
+  $('#jamlineControls').hidden=!controller;
   $('#jamlineCohostControl').hidden=state.jamlineRole!=='host';
   $('#jamlineSongControl').hidden=!controller;
   const songSelect=$('#jamlineSong'), keep=songSelect.value;
@@ -1065,6 +1067,7 @@ async function refreshJamline(){
   const ids=[...new Set([...(roster||[]).map(m=>m.user_id),...(messages||[]).map(m=>m.sender_id)])];
   const {data:profiles}=ids.length?await sb.from('profiles').select('id,username,display_name,avatar_url').in('id',ids):{data:[]};
   const byId=Object.fromEntries((profiles||[]).map(p=>[p.id,p]));
+  state.jamlineHostName=byId[room.host_id]?.display_name||byId[room.host_id]?.username||'Host';
   $('#jamlineJoinedHeading').textContent=`Joined - ${(roster||[]).length}`;
   $('#jamlineMembers').innerHTML=(roster||[]).map(m=>`<li class="row"><span class="jam-member">${avatar(byId[m.user_id],'s')}<span class="member-names"><b>${esc(byId[m.user_id]?.display_name||'Artist')}</b><em>@${esc(byId[m.user_id]?.username||'')} · ${esc(m.role)}</em></span></span>${state.jamlineRole==='host'&&m.role!=='host'?`<button class="btn ghost sm" data-jam-cohost="${esc(m.user_id)}">${m.role==='cohost'?'Remove co-host':'Make co-host'}</button><button class="btn ghost sm" data-jam-kick="${esc(m.user_id)}">Kick</button>`:''}</li>`).join('');
   renderJamlineMessages(messages||[],byId);
