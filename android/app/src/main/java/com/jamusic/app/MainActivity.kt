@@ -423,7 +423,8 @@ class MainActivity : ComponentActivity() {
         JamlineState(roomId, room.get("name")?.asString ?: "Jamline", room.get("host_id")?.asString.orEmpty(),
             room.get("current_track_id")?.takeUnless { it.isJsonNull }?.asString,
             room.get("position_ms")?.asLong ?: 0L, room.get("is_playing")?.asBoolean ?: false,
-            membership.get("role")?.asString, members, inviteModels, withProfiles)
+            membership.get("role")?.asString, members, inviteModels, withProfiles,
+            hostDisplayName = profiles[room.get("host_id")?.asString.orEmpty()]?.let { it.displayName.ifBlank { it.username } }.orEmpty())
     }
 
     private suspend fun loadJamlinePlayback(roomId: String): JamlineState = withContext(Dispatchers.IO) {
@@ -826,7 +827,7 @@ private data class JamlineState(
     val roomId: String? = null, val name: String = "", val hostId: String = "",
     val currentTrackId: String? = null, val positionMs: Long = 0L, val isPlaying: Boolean = false,
     val role: String? = null, val members: List<JamlineMember> = emptyList(), val invites: List<JamlineInvite> = emptyList(),
-    val messages: List<JamlineMessage> = emptyList()
+    val messages: List<JamlineMessage> = emptyList(), val hostDisplayName: String = ""
 )
 private fun isJamlineController(role: String?) = role == "host" || role == "cohost"
 private data class Profile(
@@ -1053,7 +1054,7 @@ private fun JaMusicApp(
         while (true) {
             try {
                 val roomId = jamlineState.roomId
-                val latest = if (roomId == null) loadJamline(userId) else loadJamlinePlayback(roomId).copy(members = jamlineState.members, invites = jamlineState.invites)
+                val latest = if (roomId == null) loadJamline(userId) else loadJamlinePlayback(roomId).copy(members = jamlineState.members, invites = jamlineState.invites, hostDisplayName = jamlineState.hostDisplayName)
                 jamlineState = latest
                 val controller = isJamlineController(latest.role)
                 if (!controller && latest.roomId != null && latest.currentTrackId != null) {
@@ -1120,10 +1121,10 @@ private fun JaMusicApp(
                 activeTrack?.let { track -> MiniPlayer(track, playing, onToggle = { setPlaybackState(!playing) }, onOpen = { playerOpen = true }) }
                 NavigationBar(containerColor = Color(0xFF17181D), tonalElevation = 0.dp) {
                     NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = { Icon(Icons.Default.Home, null) }, label = { Text("Home") })
-                    NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Icon(Icons.Default.Search, null) }, label = { Text("Search") })
+                    NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Icon(Icons.Default.Search, null) }, label = { Text("Discover") })
+                    NavigationBarItem(selected = tab == 4, onClick = { tab = 4 }, icon = { Icon(Icons.Default.LibraryMusic, null) }, label = { Text("Jamline") })
                     NavigationBarItem(selected = tab == 2, onClick = { tab = 2 }, icon = { Icon(Icons.Default.LibraryMusic, null) }, label = { Text("Library") })
                     NavigationBarItem(selected = tab == 3, onClick = { tab = 3; viewedArtistId = null }, icon = { Icon(Icons.Default.AccountCircle, null) }, label = { Text("You") })
-                    NavigationBarItem(selected = tab == 4, onClick = { tab = 4 }, icon = { Icon(Icons.Default.LibraryMusic, null) }, label = { Text("Jamline") })
                 }
             }
         }
@@ -1201,7 +1202,7 @@ private fun JaMusicApp(
                                 shownProfile?.let { Text("@${it.username}" + if (it.pronouns.isNotBlank()) " · ${it.pronouns}" else "", color = Violet, style = MaterialTheme.typography.bodySmall) }
                             }
                         }
-                        shownProfile?.bio?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.padding(top = 14.dp), color = Muted, style = MaterialTheme.typography.bodyLarge) }
+                        shownProfile?.bio?.takeIf { it.isNotBlank() }?.let { Text(it, Modifier.padding(top = 26.dp, bottom = 8.dp), color = Muted, style = MaterialTheme.typography.bodyLarge, lineHeight = 26.sp) }
                         Text("${followerCounts[shownProfile?.id] ?: 0} followers", Modifier.padding(top = 12.dp), color = Muted)
                         if (viewedArtistId != null && shownProfile != null) {
                             val isFollowing = shownProfile.id in followingIds
@@ -1260,8 +1261,7 @@ private fun JaMusicApp(
                             }
                         }
                         if (jamlineState.roomId != null) {
-                            Text("${jamlineState.name} · ${jamlineState.role}", color = Cloud, style = MaterialTheme.typography.titleLarge)
-                            Text("Room code: ${jamlineState.roomId}", color = Muted, style = MaterialTheme.typography.bodySmall)
+                            Text("${jamlineState.hostDisplayName.ifBlank { "Host" }} - Host | ${jamlineState.name}", color = Cloud, style = MaterialTheme.typography.titleLarge)
                             val sharedTitle = tracks.firstOrNull { it.id == jamlineState.currentTrackId }?.let { "${it.title} — ${it.artist}" } ?: "Waiting for the host to choose a song"
                             Text("Now playing: $sharedTitle", color = Violet)
                             if (isJamlineController(jamlineState.role)) {
@@ -1297,10 +1297,14 @@ private fun JaMusicApp(
                                 } }) { Text("Leave Jamline") }
                             }
                             Text("Chat", color = Cloud, style = MaterialTheme.typography.titleLarge)
-                            jamlineState.messages.takeLast(40).forEach { message ->
-                                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
-                                    if (message.avatarUrl.isNotBlank()) AsyncImage(model = message.avatarUrl, contentDescription = null, modifier = Modifier.size(28.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-                                    Column { Text("${message.displayName}  @${message.username}", color = Violet, style = MaterialTheme.typography.labelMedium); Text(message.body, color = Cloud) }
+                            val chatScrollState = rememberScrollState()
+                            LaunchedEffect(jamlineState.messages.size) { chatScrollState.animateScrollTo(chatScrollState.maxValue) }
+                            Column(Modifier.fillMaxWidth().heightIn(max = 280.dp).verticalScroll(chatScrollState)) {
+                                jamlineState.messages.takeLast(100).forEach { message ->
+                                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
+                                        if (message.avatarUrl.isNotBlank()) AsyncImage(model = message.avatarUrl, contentDescription = null, modifier = Modifier.size(28.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+                                        Column { Text("${message.displayName}  @${message.username}", color = Violet, style = MaterialTheme.typography.labelMedium); Text(message.body, color = Cloud) }
+                                    }
                                 }
                             }
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
